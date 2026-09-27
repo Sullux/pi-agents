@@ -5,7 +5,26 @@
 # Env:      COORD_AGENT (who you are), COORD_REPO, COORD_HUB, COORD_STALE_MIN
 set -euo pipefail
 
-REPO="${COORD_REPO:-Sullux/pitcairn-portal}"
+resolve_repo() {
+  if [ -n "${COORD_REPO:-}" ]; then
+    echo "$COORD_REPO"
+    return
+  fi
+  local remote
+  remote="$(git remote get-url origin 2>/dev/null || true)"
+  if [ -n "$remote" ]; then
+    remote="${remote%.git}"
+    local path
+    path="$(echo "$remote" | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#')"
+    if [ -n "$path" ]; then
+      echo "$path"
+      return
+    fi
+  fi
+  echo "Sullux/pitcairn-portal"
+}
+
+REPO="$(resolve_repo)"
 AGENT="${COORD_AGENT:-unknown-agent}"
 STALE_MIN="${COORD_STALE_MIN:-45}"
 HUB_TITLE="Coordination hub"
@@ -52,6 +71,10 @@ gh auth status >/dev/null 2>&1 || die "gh is not authenticated; run: gh auth log
 ME="$(gh api user --jq .login)"
 
 # ---------- helpers ----------
+clean_agent() {
+  echo "$1" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s#^pi/##; s#^@##'
+}
+
 header() { printf '**%s** | agent: %s | human: @%s | at: %s' "$1" "$AGENT" "$ME" "$(now)"; }
 
 comment() { # issue verb body
@@ -62,7 +85,25 @@ comment() { # issue verb body
 labels_of()    { gh issue view "$1" --repo "$REPO" --json labels --jq '.labels[].name'; }
 assignees_of() { gh issue view "$1" --repo "$REPO" --json assignees --jq '.assignees[].login'; }
 has_label()    { labels_of "$1" | grep -qx "$2"; }
-is_mine()      { assignees_of "$1" | grep -qx "$ME"; }
+
+# Active agent owner of an issue according to protocol comments; empty if unclaimed/released/done.
+owner_of() {
+  gh issue view "$1" --repo "$REPO" --json comments --jq '
+    ([.comments[] | select(.body | test("^\\*\\*(CLAIM|RELEASE|HANDOFF|DONE)\\*\\*"))] | last) as $last
+    | if $last == null then ""
+      elif ($last.body | startswith("**CLAIM**")) then
+        (($last.body | capture("\\| agent: (?<a>[^|]+) \\|") | .a | gsub("^[ \t]+|[ \t]+$"; "")) // "")
+      elif ($last.body | startswith("**HANDOFF**")) then
+        (($last.body | capture("to: @?(?<to>\\S+)") | .to // "") | gsub("^[ \t]+|[ \t]+$"; ""))
+      else ""
+      end' 2>/dev/null || true
+}
+
+is_mine() {
+  local owner
+  owner="$(owner_of "$1")"
+  [ -n "$owner" ] && [ "$(clean_agent "$owner")" = "$(clean_agent "$AGENT")" ]
+}
 
 # Declared file scope from the issue body's '## Files' section; empty if none.
 files_of() { # issue
@@ -218,14 +259,22 @@ Board: \`coord.sh board\` - or filter issues by \`ws:*\`, \`status:*\`, \`p0\`,
 
 cmd_board() {
   gh issue list --repo "$REPO" --state open --limit 100 \
-    --json number,title,labels,assignees,body --jq '
+    --json number,title,labels,assignees,body,comments --jq '
     .[] | select((.labels|map(.name)|index("hub"))|not)
     | (.labels|map(.name)) as $l
+    | ((.comments | map(select(.body | test("^\\*\\*(CLAIM|RELEASE|HANDOFF|DONE)\\*\\*"))) | last) // null) as $last
+    | (if $last == null then "-"
+       elif ($last.body | startswith("**CLAIM**")) then
+         (($last.body | capture("\\| agent: (?<a>[^|]+) \\|") | .a | gsub("^[ \t]+|[ \t]+$"; "")) // "-")
+       elif ($last.body | startswith("**HANDOFF**")) then
+         (($last.body | capture("to: @?(?<to>\\S+)") | .to // "-") | gsub("^[ \t]+|[ \t]+$"; ""))
+       else "-"
+       end) as $agent_owner
     | [ "#\(.number)",
         (($l|map(select(startswith("status:")))|.[0] // "status:unclaimed")|ltrimstr("status:")),
         (($l|map(select(startswith("ws:")))|.[0] // "ws:-")|ltrimstr("ws:")),
         (($l|map(select(test("^p[0-2]$")))|.[0] // "-")),
-        ((.assignees|map("@"+.login)|join(",")) | if . == "" then "-" else . end),
+        $agent_owner,
         .title,
         ((.body // "" | [match("## Files\\n([^#]*)")] | .[0].captures[0].string // "")
           | gsub("\n";" ") | gsub("_\\(none listed\\)_";"") | .[0:48])
@@ -237,20 +286,48 @@ cmd_board() {
 
 cmd_stale() {
   gh issue list --repo "$REPO" --state open --limit 100 \
-    --json number,title,assignees,comments --jq "
-    .[] | select(.assignees|length>0)
+    --json number,title,labels,comments --jq "
+    .[] | select((.labels|map(.name)|index(\"hub\"))|not)
+    | ((.comments | map(select(.body | test(\"^\\\\*\\\\*(CLAIM|RELEASE|HANDOFF|DONE)\\\\*\\\\*\"))) | last) // null) as \$last
+    | (if \$last == null then \"\"
+       elif (\$last.body | startswith(\"**CLAIM**\")) then
+         ((\$last.body | capture(\"\\\\| agent: (?<a>[^|]+) \\\\|\") | .a | gsub(\"^[ \\t]+|[ \\t]+$\"; \"\")) // \"\")
+       elif (\$last.body | startswith(\"**HANDOFF**\")) then
+         ((\$last.body | capture(\"to: @?(?<to>\\\\S+)\") | .to // \"\") | gsub(\"^[ \\t]+|[ \\t]+$\"; \"\"))
+       else \"\"
+       end) as \$owner
+    | select(\$owner != \"\")
     | (([.comments[] | select(.body|test(\"$HEARTBEAT\")) | .createdAt | fromdateiso8601] | max) // 0) as \$t
     | select(\$t == 0 or (now - \$t) > ($STALE_MIN*60))
-    | \"#\(.number)\t\(.assignees|map(\"@\"+.login)|join(\",\"))\t\(if \$t==0 then \"no heartbeat\" else ((now-\$t)/60|floor|tostring)+\"m silent\" end)\t\(.title)\"" \
+    | \"#\(.number)\t\(\$owner)\t\(if \$t==0 then \"no heartbeat\" else ((now-\$t)/60|floor|tostring)+\"m silent\" end)\t\(.title)\"" \
   | awk -F '\t' '{printf "%-6s %-22s %-14s %s\n",$1,$2,$3,$4}'
 }
 
 cmd_sync() {
   echo "== board ($REPO) =="; cmd_board
-  echo; echo "== yours (@$ME) =="
-  gh issue list --repo "$REPO" --assignee "@me" --state open --json number,title,labels \
-    --jq '.[] | "#\(.number) \(.title)  [\([.labels[].name | select(startswith("status:"))] | join(","))]"' \
-    | sed 's/^/  /'
+  echo; echo "== yours ($AGENT) =="
+  local my_issues
+  my_issues="$(gh issue list --repo "$REPO" --state open --limit 100 \
+    --json number,title,labels,comments --jq '
+    .[] | select((.labels|map(.name)|index("hub"))|not)
+    | (.labels|map(.name)) as $l
+    | ((.comments | map(select(.body | test("^\\*\\*(CLAIM|RELEASE|HANDOFF|DONE)\\*\\*"))) | last) // null) as $last
+    | (if $last == null then ""
+       elif ($last.body | startswith("**CLAIM**")) then
+         (($last.body | capture("\\| agent: (?<a>[^|]+) \\|") | .a | gsub("^[ \t]+|[ \t]+$"; "")) // "")
+       elif ($last.body | startswith("**HANDOFF**")) then
+         (($last.body | capture("to: @?(?<to>\\S+)") | .to // "") | gsub("^[ \t]+|[ \t]+$"; ""))
+       else ""
+       end) as $owner
+    | select(($owner | gsub("^[ \t]+|[ \t]+$"; "") | sub("^pi/"; "") | sub("^@"; "")) == ("'"$(clean_agent "$AGENT")"'"))
+    | "  #\(.number) \(.title)  [\([$l[] | select(startswith("status:"))] | join(","))]"' 2>/dev/null || true)"
+
+  if [ -n "$my_issues" ]; then
+    echo "$my_issues"
+  else
+    echo "  (none)"
+  fi
+
   echo; echo "== stale claims (> ${STALE_MIN}m) =="; cmd_stale | sed 's/^/  /'
   echo; echo "== needs-human =="
   gh issue list --repo "$REPO" --label needs-human --state open --json number,title \
@@ -267,7 +344,12 @@ cmd_sync() {
 }
 
 cmd_hub() {
-  parse "$@"; local text="${POS[0]:-}"; [ -n "$text" ] || die 'hub "on / blocked / next"'
+  parse "$@"
+  local text="${POS[*]:-}"
+  [ -n "$text" ] || die 'hub "text"'
+  if [[ "$text" =~ ^(on|blocked|next)[[:space:]]+(.*)$ ]]; then
+    text="${BASH_REMATCH[2]}"
+  fi
   local hub; hub="$(hub_number)"; [ -n "$hub" ] || die "no hub issue; run: coord.sh setup"
   comment "$hub" SYNC "$text"
 }
@@ -312,18 +394,23 @@ _(created by ${AGENT} for @${ME} at $(now))_
 
 cmd_claim() {
   parse "$@"; need_issue
-  local owners; owners="$(assignees_of "$N" | tr '\n' ' ')"
-  case " $owners" in *" $ME "*) note "#$N is already yours"; return 0 ;; esac
-  if [ -n "${owners// /}" ]; then
-    die "#$N is held by @${owners% } - use: propose $N \"split: ...\"  or  question $N \"...\""
+  local current_owner; current_owner="$(owner_of "$N")"
+  if [ -n "$current_owner" ]; then
+    if [ "$(clean_agent "$current_owner")" = "$(clean_agent "$AGENT")" ]; then
+      note "#$N is already yours"
+      return 0
+    fi
+    die "#$N is held by $current_owner - use: propose $N \"split: ...\"  or  question $N \"...\""
   fi
+
   # v3 file scope: a claim must declare a non-empty Files scope.
   local scope; scope="$(files_of "$N")"
   if [ -z "$scope" ]; then
     die "#$N declares no Files scope - add a '## Files' section (coord new --files) before claiming"
   fi
+
   # v3 file scope: refuse active overlap unless the issue records a split or shares an owner.
-  local o their clash common
+  local o their clash o_owner
   while IFS=$'\t' read -r o _; do
     [ -n "$o" ] || continue
     [[ "$o" =~ ^[0-9]+$ ]] || continue
@@ -337,46 +424,59 @@ cmd_claim() {
     if gh issue view "$o" --repo "$REPO" --json body --jq '.body // ""' | grep -qE '^(\^)?split:'; then
       continue
     fi
-    common=""
-    for w in $owners; do
-      assignees_of "$o" | grep -qx "$w" && { common="$w"; break; }
-    done
-    [ -n "$common" ] && continue
+    o_owner="$(owner_of "$o")"
+    [ -z "$o_owner" ] && continue
+    [ "$(clean_agent "$o_owner")" = "$(clean_agent "$AGENT")" ] && continue
     die "#$N scope overlaps #$o on: $(printf '%s' "$clash" | paste -sd, -) - record a split on one of the issues or hand off ownership first"
   done < <(gh issue list --repo "$REPO" --state open --limit 100 --json number,labels,body \
              --jq '.[] | select(((.labels // []) | map(.name) | index("hub")) | not) | select(.number != '"$N"') | "\(.number)\t\(.body // "")"')
+
   comment "$N" CLAIM "plan: ${OPT_plan:-_(none given)_}"$'\n'"eta: ${OPT_eta:-_(none given)_}"
-  gh issue edit "$N" --repo "$REPO" --add-assignee "@me" >/dev/null
+  gh issue edit "$N" --repo "$REPO" --add-assignee "@me" >/dev/null 2>&1 || true
   set_status "$N" claimed
   sleep 2
-  local all; all="$(assignees_of "$N")"
-  if [ "$(printf '%s\n' "$all" | grep -c .)" -gt 1 ]; then
-    local list winner
-    list="$(printf '%s\n' "$all" | sed 's/.*/"&"/' | paste -sd, -)"
-    winner="$(gh issue view "$N" --repo "$REPO" --json comments --jq \
-      "[.comments[] | select(.body|startswith(\"**CLAIM**\")) | select(.author.login as \$a | [$list] | index(\$a))]
-       | sort_by(.createdAt) | .[0].author.login")"
-    if [ "$winner" != "$ME" ]; then
-      gh issue edit "$N" --repo "$REPO" --remove-assignee "@me" >/dev/null
-      comment "$N" RELEASE "lost claim race to @$winner (earlier CLAIM); backing off"
-      die "#$N was claimed simultaneously by @$winner - they keep it"
+
+  local claim_history
+  claim_history="$(gh issue view "$N" --repo "$REPO" --json comments --jq '
+    ([.comments[] | select(.body | test("^\\*\\*(RELEASE|DONE)\\*\\*")) | .createdAt] | max) // "" as $last_rel
+    | [ .comments[]
+        | select(.body | startswith("**CLAIM**"))
+        | select(.createdAt >= $last_rel)
+        | {
+            agent: (.body | capture("\\| agent: (?<a>[^|]+) \\|") | .a | gsub("^[ \t]+|[ \t]+$"; "")),
+            createdAt: .createdAt
+          }
+      ] | sort_by(.createdAt)' 2>/dev/null || echo "[]")"
+
+  local claimant_count
+  claimant_count="$(echo "$claim_history" | jq 'length' 2>/dev/null || echo "1")"
+
+  if [ "$claimant_count" -gt 1 ]; then
+    local earliest_agent
+    earliest_agent="$(echo "$claim_history" | jq -r '.[0].agent' 2>/dev/null || echo "")"
+    if [ -n "$earliest_agent" ] && [ "$(clean_agent "$earliest_agent")" != "$(clean_agent "$AGENT")" ]; then
+      gh issue edit "$N" --repo "$REPO" --remove-assignee "@me" >/dev/null 2>&1 || true
+      comment "$N" RELEASE "lost claim race to $earliest_agent (earlier CLAIM); backing off"
+      die "#$N was claimed simultaneously by $earliest_agent - they keep it"
     fi
-    note "claim race on #$N: your CLAIM is earliest; the other claimant's script will back off"
+    note "claim race on #$N: your CLAIM is earliest; other claimants will back off"
   fi
-  echo "#$N claimed by @$ME"
+  echo "#$N claimed by $AGENT"
 }
 
 cmd_release() {
   parse "$@"; need_issue
-  local owners; owners="$(assignees_of "$N")"
+  local current_owner; current_owner="$(owner_of "$N")"
   if [ -n "${FLAG_stale:-}" ]; then
-    [ -n "$owners" ] || die "#$N has no assignee"
+    [ -n "$current_owner" ] || die "#$N has no active owner"
     is_stale "$N" || die "#$N had a heartbeat within ${STALE_MIN}m - not stale; ask the owner"
-    local o; for o in $owners; do gh issue edit "$N" --repo "$REPO" --remove-assignee "$o" >/dev/null; done
-    comment "$N" RELEASE "stale claim released: no heartbeat for >${STALE_MIN}m. previous owner(s): $(printf '%s\n' "$owners" | sed 's/^/@/' | paste -sd' ' -). reason: ${OPT_reason:-none given}"
+    gh issue edit "$N" --repo "$REPO" --remove-assignee "@me" >/dev/null 2>&1 || true
+    comment "$N" RELEASE "stale claim released: no heartbeat for >${STALE_MIN}m. previous owner: $current_owner. reason: ${OPT_reason:-none given}"
   else
-    printf '%s\n' "$owners" | grep -qx "$ME" || die "#$N is not yours; use --stale if it is abandoned"
-    gh issue edit "$N" --repo "$REPO" --remove-assignee "@me" >/dev/null
+    if [ -n "$current_owner" ] && [ "$(clean_agent "$current_owner")" != "$(clean_agent "$AGENT")" ]; then
+      die "#$N is owned by $current_owner, not $AGENT; use --stale if it is abandoned"
+    fi
+    gh issue edit "$N" --repo "$REPO" --remove-assignee "@me" >/dev/null 2>&1 || true
     comment "$N" RELEASE "reason: ${OPT_reason:-none given}"
   fi
   set_status "$N" unclaimed
@@ -534,7 +634,8 @@ cmd_show() {
 # ---------- dispatch ----------
 cmd="${1:-}"; [ $# -gt 0 ] && shift
 case "$cmd" in
-  hub|new|release|claim|show) MAX_POS=1 ;;
+  hub) MAX_POS=10 ;;
+  new|release|claim|show) MAX_POS=1 ;;
   board|sync|setup|stale) MAX_POS=0 ;;
   status|block|unblock|question|answer|propose|accept|counter|reject|handoff|review|done) MAX_POS=2 ;;
 esac
