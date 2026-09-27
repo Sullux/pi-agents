@@ -148,6 +148,22 @@ The bash implementation (`coord.sh`) suffered from critical concurrency defects 
 5. **Declared Scope Enforcement**:
    - Claims require non-empty `## Files` scope declarations to prevent silent overlapping edits across agents.
 
+6. **In-Context Belief Drift vs. Board Reality**:
+   - Continuous agent sessions (`pi --continue`) retain turn history, creating inertia where agents hold stale beliefs (e.g., assuming an issue is still "awaiting human ruling" long after the human has ruled).
+   - The coordination tool (`coord` / `page coord`) must explicitly highlight state changes in its output (e.g., `[RULED: Ready to claim]`, `[UNBLOCKED]`, `[PR AWAITING REVIEW]`) so the agent's LLM immediately breaks out of stale conversational assumptions.
+
+7. **Decision-to-Task Semantic Lifecycle**:
+   - A decision issue awaiting human ruling must carry explicit blocking metadata (`needs-human`, `status:blocked`) so runner pre-flights do not thrash on it.
+   - Once ruled on by a human, the issue must cleanly transition in type and title (`decision: ...` -> `task: ...` or `docs: ...`) so that both automated runner filters and LLM semantic parsing recognize it as an actionable, claimable task.
+
+8. **Backlog Discrimination & Visible Cadence**:
+   - The runner's pre-flight check must strictly prioritize:
+     1. **Owned Active Claims**: If the agent already owns an in-flight issue, proceed immediately (`ready`).
+     2. **Actionable Backlog**: If unclaimed tasks (not blocked, not needs-human) or open PRs exist, proceed immediately (`ready`).
+     3. **Peer Contention**: If all open issues are held by peers, enter a short backoff (`idle_busy`, 60s) with a visible seconds countdown.
+     4. **Drained Queue**: If 0 open issues exist, enter a long backoff (`idle_empty`, 300s) with a visible seconds countdown.
+   - Never allow silent, static sleep loops; all waiting cycles must render live in-place countdowns so operators know the loop is healthy and alive.
+
 ---
 
 ## 6. Autonomous Agent Execution Loop
