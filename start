@@ -66,12 +66,12 @@ wait_interruptible() {
   echo ""
   echo "-----------------------------------------------------------------"
   echo "  $reason"
-  echo "  Waiting ${seconds}s... Press ESC, 'q', or Enter to stop the loop."
   echo "-----------------------------------------------------------------"
 
   local elapsed=0
   while [[ "$elapsed" -lt "$seconds" ]]; do
     local remaining=$((seconds - elapsed))
+    printf "\r  Waiting %2ds... Press ESC, 'q', or Enter to stop the loop." "$remaining"
     local step=1
     [[ "$remaining" -lt 1 ]] && step="$remaining"
 
@@ -84,6 +84,7 @@ wait_interruptible() {
     fi
     elapsed=$((elapsed + step))
   done
+  echo ""
   return 1
 }
 
@@ -126,7 +127,7 @@ check_work_availability() {
       ] | length' 2>/dev/null || echo "0")
   fi
 
-  # 2. Treat any issue as actionable unclaimed unless claimed, in-progress, blocked, in-review, hub, needs-human, or type:decision
+  # 2. Treat any issue as actionable unclaimed unless claimed, in-progress, blocked, in-review, hub, or needs-human
   local unclaimed
   unclaimed=$(echo "$issues_json" | jq '
     [
@@ -137,8 +138,7 @@ check_work_availability() {
           index("status:in-progress") or
           index("status:blocked") or
           index("status:in-review") or
-          index("needs-human") or
-          index("type:decision")
+          index("needs-human")
         )) | not
       )
     ] | length' 2>/dev/null || echo "0")
