@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Agent Loop Startup Script (TUI + Auto-Settle + Pre-Flight Work Detection)
+#
+# Usage:
+#   ./start <project-folder> [optional-steering-message]
+#
+# Features:
+#   - Dynamic Hot-Reload: Re-execs script at end of cycle so file edits take effect immediately
+#   - Pre-Flight Work Check:
+#       * No open issues (excluding hub #4): sleep 5m (300s)
+#       * All open issues claimed & no PRs to review: sleep 60s
+#       * Work available (unclaimed issues or open PRs): run pi turn immediately
+#   - Interactive Interruptibility: ESC, 'q', or Enter during any sleep prompt exits loop cleanly
+# ==============================================================================
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AGENT_NAME="$(basename "$SCRIPT_DIR")"
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+
+# 1. Load agent-level config if present
+CONF_FILE="$SCRIPT_DIR/agent.conf"
+DEFAULT_MODEL="mimo/mimo-v2.6-pro"
+DEFAULT_THINKING="medium"
+DEFAULT_PORT=3000
+
+if [[ -f "$CONF_FILE" ]]; then
+  # shellcheck source=/dev/null
+  source "$CONF_FILE"
+fi
+
+MODEL="${MODEL:-$DEFAULT_MODEL}"
+THINKING="${THINKING:-$DEFAULT_THINKING}"
+PORT="${PORT:-$DEFAULT_PORT}"
+
+# 2. Parse command-line arguments
+PROJECT_DIR="${1:-pitcairn-portal}"
+STEERING="${2:-}"
+
+# Resolve project folder relative to script directory
+TARGET_PATH="$SCRIPT_DIR/$PROJECT_DIR"
+if [[ ! -d "$TARGET_PATH" ]]; then
+  echo "Error: Target project directory '$TARGET_PATH' does not exist." >&2
+  exit 1
+fi
+
+# 3. Export multi-agent environment variables
+export COORD_AGENT="agent-$AGENT_NAME"
+export PORT="$PORT"
+# Tell the auto-compact extension to shut down Pi's TUI when the turn settles
+export PI_AUTO_EXIT=1
+
+# Cycle tracker across re-execs
+AGENT_CYCLE="${AGENT_CYCLE:-1}"
+
+# Trap Ctrl+C (SIGINT) to cleanly exit the loop
+trap 'echo -e "\n[Agent Loop] Interrupted by user. Exiting."; exit 0' SIGINT SIGTERM
+
+# Helper: Wait with countdown / interruptible keypress
+# Returns 0 if user requested exit (ESC, q, Enter), 1 if time elapsed normally
+wait_interruptible() {
+  local seconds="$1"
+  local reason="$2"
+  echo ""
+  echo "-----------------------------------------------------------------"
+  echo "  $reason"
+  echo "  Waiting ${seconds}s... Press ESC, 'q', or Enter to stop the loop."
+  echo "-----------------------------------------------------------------"
+
+  local elapsed=0
+  while [[ "$elapsed" -lt "$seconds" ]]; do
+    local remaining=$((seconds - elapsed))
+    local step=1
+    [[ "$remaining" -lt 1 ]] && step="$remaining"
+
+    # read single character with 1 second timeout
+    if read -t "$step" -n 1 -s KEY; then
+      if [[ "$KEY" == $'\e' || "$KEY" == "q" || "$KEY" == "Q" || -z "$KEY" ]]; then
+        echo -e "\n[Agent Loop] User requested exit."
+        return 0
+      fi
+    fi
+    elapsed=$((elapsed + step))
+  done
+  return 1
+}
+
+# Helper: Check GitHub issue/PR backlog
+# Outputs:
+#   ready       -> work available (unclaimed issues or open PRs)
+#   idle_empty  -> 0 open issues (excluding hub #4)
+#   idle_busy   -> open issues exist, but none unclaimed and 0 PRs
+check_work_availability() {
+  local total_issues
+  total_issues=$(gh issue list --state open --json number,labels \
+    --jq '[.[] | select(.labels[].name != "hub")] | length' 2>/dev/null || echo "1")
+
+  if [[ "$total_issues" -eq 0 ]]; then
+    echo "idle_empty"
+    return
+  fi
+
+  # Treat any issue as unclaimed unless explicitly claimed, in-progress, in-review, or blocked
+  local unclaimed
+  unclaimed=$(gh issue list --state open --json number,labels \
+    --jq '[.[] | select(
+      (.labels | map(.name) | (
+        index("hub") or
+        index("status:claimed") or
+        index("status:in-progress") or
+        index("status:blocked") or
+        index("status:in-review")
+      )) | not
+    )] | length' 2>/dev/null || echo "0")
+
+  local open_prs
+  open_prs=$(gh pr list --state open --json number \
+    --jq 'length' 2>/dev/null || echo "0")
+
+  if [[ "$unclaimed" -gt 0 || "$open_prs" -gt 0 ]]; then
+    echo "ready"
+  else
+    echo "idle_busy"
+  fi
+}
+
+if [[ "$AGENT_CYCLE" -eq 1 ]]; then
+  echo "================================================================="
+  echo "  Agent Name:    $COORD_AGENT"
+  echo "  Project:       $PROJECT_DIR ($TARGET_PATH)"
+  echo "  Model:         $MODEL (thinking: $THINKING)"
+  echo "  Dev Server:    Port $PORT"
+  echo "  UI Mode:       Interactive TUI (Auto-exit on turn settle)"
+  if [[ -n "$STEERING" ]]; then
+    echo "  Steering:      $STEERING"
+  fi
+  echo "================================================================="
+fi
+
+cd "$TARGET_PATH"
+
+# 4. Pre-Flight Check before burning LLM tokens
+while true; do
+  AVAILABILITY="$(check_work_availability)"
+
+  if [[ "$AVAILABILITY" == "idle_empty" ]]; then
+    if wait_interruptible 300 "[Backlog Empty] No open issues in repository."; then
+      exit 0
+    fi
+    continue
+  elif [[ "$AVAILABILITY" == "idle_busy" ]]; then
+    if wait_interruptible 60 "[Contention] All open issues claimed; waiting on peer PRs."; then
+      exit 0
+    fi
+    continue
+  fi
+
+  # Work is available
+  break
+done
+
+echo ""
+echo "-----------------------------------------------------------------"
+echo "  [Cycle $AGENT_CYCLE] Starting pi interactive session for $COORD_AGENT at $(date +'%H:%M:%S')"
+echo "-----------------------------------------------------------------"
+
+# Assemble prompt
+BASE_PROMPT="Proceed with development using the coordinate skill."
+if [[ -n "$STEERING" ]]; then
+  FULL_PROMPT="$BASE_PROMPT Explicit steering from user: $STEERING"
+else
+  FULL_PROMPT="$BASE_PROMPT"
+fi
+
+# Run pi in interactive TUI mode with:
+# -c / --continue (resume existing session or start new if none)
+# -a / --approve (trust project-local extensions and skills)
+# --model and --thinking
+# (When turn settles, .pi/extensions/auto-compact.ts detects PI_AUTO_EXIT=1 and exits cleanly)
+pi \
+  --continue \
+  --approve \
+  --model "$MODEL" \
+  --thinking "$THINKING" \
+  "$FULL_PROMPT" || {
+    STATUS=$?
+    echo "[Agent Loop] pi exited with status code: $STATUS"
+  }
+
+# Wait brief cooldown after completed turn before next cycle
+if wait_interruptible 10 "[Cycle $AGENT_CYCLE complete] Post-turn cooldown."; then
+  exit 0
+fi
+
+# Re-exec script for dynamic hot-reloading
+export AGENT_CYCLE=$((AGENT_CYCLE + 1))
+exec "$SCRIPT_PATH" "$PROJECT_DIR" "$STEERING"
