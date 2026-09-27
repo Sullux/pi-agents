@@ -89,37 +89,65 @@ wait_interruptible() {
 
 # Helper: Check GitHub issue/PR backlog
 # Outputs:
-#   ready       -> work available (unclaimed issues or open PRs)
-#   idle_empty  -> 0 open issues (excluding hub #4)
-#   idle_busy   -> open issues exist, but none unclaimed and 0 PRs
+#   ready       -> work available (my claims > 0, unclaimed actionable tasks > 0, or open PRs)
+#   idle_empty  -> 0 open issues (excluding hub)
+#   idle_busy   -> open issues exist, but none unclaimed/actionable, 0 PRs, and no owned claims
 check_work_availability() {
+  local agent="${1:-}"
+  local clean_agent
+  clean_agent="$(echo "$agent" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g; s#^pi/##; s#^agent-##; s#^@##')"
+
+  local issues_json
+  issues_json="$(gh issue list --state open --limit 100 --json number,labels,comments 2>/dev/null || echo "[]")"
+
   local total_issues
-  total_issues=$(gh issue list --state open --json number,labels \
-    --jq '[.[] | select(.labels[].name != "hub")] | length' 2>/dev/null || echo "1")
+  total_issues=$(echo "$issues_json" | jq '[.[] | select((.labels|map(.name)|index("hub"))|not)] | length' 2>/dev/null || echo "0")
 
   if [[ "$total_issues" -eq 0 ]]; then
     echo "idle_empty"
     return
   fi
 
-  # Treat any issue as unclaimed unless explicitly claimed, in-progress, in-review, or blocked
+  # 1. Check if THIS agent already owns an in-flight claimed issue
+  local my_claims=0
+  if [[ -n "$clean_agent" ]]; then
+    my_claims=$(echo "$issues_json" | jq --arg ca "$clean_agent" '
+      [
+        .[] | select((.labels|map(.name)|index("hub"))|not)
+        | ((.comments | map(select(.body | test("^\\*\\*(CLAIM|RELEASE|HANDOFF|DONE)\\*\\*"))) | last) // null) as $last
+        | (if $last == null then ""
+           elif ($last.body | startswith("**CLAIM**")) then
+             (($last.body | capture("\\| agent: (?<a>[^|]+) \\|") | .a | gsub("^[ \t]+|[ \t]+$"; "")) // "")
+           elif ($last.body | startswith("**HANDOFF**")) then
+             (($last.body | capture("to: @?(?<to>\\S+)") | .to // "") | gsub("^[ \t]+|[ \t]+$"; ""))
+           else ""
+           end) as $owner
+        | select(($owner | gsub("^[ \t]+|[ \t]+$"; "") | sub("^pi/"; "") | sub("^agent-"; "") | sub("^@"; "")) == $ca)
+      ] | length' 2>/dev/null || echo "0")
+  fi
+
+  # 2. Treat any issue as actionable unclaimed unless claimed, in-progress, blocked, in-review, hub, needs-human, or type:decision
   local unclaimed
-  unclaimed=$(gh issue list --state open --json number,labels \
-    --jq '[.[] | select(
-      (.labels | map(.name) | (
-        index("hub") or
-        index("status:claimed") or
-        index("status:in-progress") or
-        index("status:blocked") or
-        index("status:in-review")
-      )) | not
-    )] | length' 2>/dev/null || echo "0")
+  unclaimed=$(echo "$issues_json" | jq '
+    [
+      .[] | select(
+        (.labels | map(.name) | (
+          index("hub") or
+          index("status:claimed") or
+          index("status:in-progress") or
+          index("status:blocked") or
+          index("status:in-review") or
+          index("needs-human") or
+          index("type:decision")
+        )) | not
+      )
+    ] | length' 2>/dev/null || echo "0")
 
+  # 3. Check for open PRs
   local open_prs
-  open_prs=$(gh pr list --state open --json number \
-    --jq 'length' 2>/dev/null || echo "0")
+  open_prs=$(gh pr list --state open --json number --jq 'length' 2>/dev/null || echo "0")
 
-  if [[ "$unclaimed" -gt 0 || "$open_prs" -gt 0 ]]; then
+  if [[ "$my_claims" -gt 0 || "$unclaimed" -gt 0 || "$open_prs" -gt 0 ]]; then
     echo "ready"
   else
     echo "idle_busy"
@@ -143,7 +171,7 @@ cd "$TARGET_PATH"
 
 # 4. Pre-Flight Check before burning LLM tokens
 while true; do
-  AVAILABILITY="$(check_work_availability)"
+  AVAILABILITY="$(check_work_availability "$AGENT_NAME")"
 
   if [[ "$AVAILABILITY" == "idle_empty" ]]; then
     if wait_interruptible 300 "[Backlog Empty] No open issues in repository."; then
