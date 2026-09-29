@@ -62,12 +62,33 @@ page projects add Sullux/pitcairn-portal --alias pp
 
 `page` automatically provisions dedicated clones for your agents and sets up project templates outside the git trees.
 
-### 5. Launch the Swarm
+### 5. Launch Agents in Terminals
 
-Start the autonomous supervision loop:
+The workflow is human-centric: open a terminal window for each agent you want working concurrently and start them independently:
 
 ```bash
-page agents start pp
+# Terminal 1:
+page start Alpha pp
+
+# Terminal 2:
+page start Bravo pp
+
+# Terminal 3 (with initial steering):
+page start Charlie pp --steering "Prioritize ws:admin-portal issues"
+```
+
+Each terminal runs Pi in interactive TUI mode with live thinking and diffs. During inter-cycle cooldowns or backlog waits, press **`q`** or **`Esc`** to cleanly stop the loop.
+
+To check on active agents from another terminal:
+```bash
+page status
+# or filter by project:
+page status pp
+```
+
+To stop an agent remotely:
+```bash
+page stop Alpha
 ```
 
 ### 6. Keep It Updated
@@ -91,6 +112,15 @@ page --help                          # Show command help
 page --version                       # Show current version
 page -p, --profile <name>            # Run command under a specific profile
 page update                          # Upgrade page to the latest release
+```
+
+### Session Management (`page start`, `page status`, `page stop`)
+
+```bash
+page start <agent> <project>         # Start single autonomous agent session in this terminal
+page start <agent> <project> --steering "..." # Start with initial operator guidance
+page status [project]                # Display table of active sessions (PID, status, uptime)
+page stop <agent> [--kill]           # Stop an active agent session remotely (SIGTERM/SIGKILL)
 ```
 
 ### Profile Management (`page profiles`, `page use`)
@@ -118,7 +148,6 @@ page projects remove <alias>         # Unenroll project from active profile
 page agents list                     # List agents in active profile
 page agents add <name> [--model M]   # Create a new agent
 page agents show <name>              # Show agent details and active claims
-page agents start <project>          # Launch agent execution loop
 ```
 
 ### Environment & Guidance (`page env`, `page guide`)

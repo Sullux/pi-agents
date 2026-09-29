@@ -243,16 +243,21 @@ When an operator runs `page update` (or `npm i -g @sullux/page`), running agents
    At the boundary of each loop cycle (during the idle countdown or inter-turn cooldown), the supervisor checks if the on-disk binary mtime or version has changed. If an update is detected, it logs `[page] Update detected: reloading supervisor...` and re-executes itself via `child_process.spawn(process.execPath, process.argv, { stdio: 'inherit' })` before exiting the old process. Active Pi turns finish their turns completely undisturbed.
 
 ### Clean Interruptibility & Lifecycle Control
-The runner maintains state in `~/.config/page/state/<agent>-<project>.json`:
-- **Graceful Stop**: `page stop <agent> <project>` sets `stopRequested: true`. The runner allows the current Pi turn to settle cleanly, executes any auto-compaction, releases locks, and exits without re-executing.
-- **Hard Stop**: `page stop <agent> <project> --kill` sends `SIGINT` / `SIGTERM` to the active Pi child process and halts immediately.
-- **State Reporting**: The runner constantly updates its status (`idle_empty`, `idle_busy`, `running_turn`, `cooldown`, `stopped`) with turn counters and claimed issue numbers.
+The runner maintains lightweight session state in `<profile-root>/<agent>/.session.json`:
+- **Interactive TTY Interruption**: During any wait state (post-turn cooldown or idle backlog polling), `stdin` operates in raw mode listening for **`q`**, **`Q`**, **`Esc`**, or **Ctrl+C**. Pressing any of these keys immediately cancels the timer, cleans up the session file, restores terminal state, and cleanly terminates the runner loop.
+- **Session State Tracking**: When an agent session starts, it records `{ pid, agent, project, startedAt, status }` in its dedicated `.session.json`. Process exit hooks guarantee the file is unlinked on termination.
+- **Cross-Terminal Stop**: `page stop <agent> [--kill]` reads the agent's active PID, verifies liveness, and sends `SIGTERM` (or `SIGKILL` if `--kill` is passed).
+- **Status Reporting**: `page status [project]` inspects all agent session files in the active profile, automatically prunes any dead PIDs, and displays an aligned status table with uptime and current status.
 
 ---
 
 ## 7. Pi Extension: Auto-Compact & Prompt Composition
 
-Instead of copying `.pi` folders into every cloned repository, `page` maintains a single canonical extension and points Pi to it at runtime (`pi -e ~/.config/page/extension`).
+Instead of copying `.pi` folders into every cloned repository or symlinking them into profiles, `page` points Pi directly to the bundled extension at runtime using Pi's native flag:
+```bash
+pi --continue --approve --extension /path/to/@sullux/page/pi/extensions/auto-compact.ts "..."
+```
+This guarantees that target repositories remain 100% clean and agnostic, while personal/interactive Pi sessions outside `page` remain completely untouched.
 
 The extension provides two critical functions:
 
@@ -288,6 +293,14 @@ page -p work agents list             # Run command against the 'work' profile
 page update                          # Self-update page to the latest version via npm/yarn
 ```
 
+### Session Management (`page start`, `page status`, `page stop`)
+```bash
+page start <agent> <project>         # Start single autonomous agent session in this terminal
+page start <agent> <project> --steering "..." # Start with initial operator guidance
+page status [project]                # Display table of active sessions (PID, status, uptime)
+page stop <agent> [--kill]           # Stop an active agent session remotely (SIGTERM/SIGKILL)
+```
+
 ### Profile Management (`page profiles`, `page use`)
 ```bash
 page profiles list                   # List all registered profiles (marks active with *)
@@ -312,7 +325,6 @@ page agents add <name> [--model <m>] [--thinking <level>]
                                      # Create agent directory, identity AGENTS.md, and configuration
 page agents list                     # List all agents in the current profile
 page agents show <name>              # Show agent details, active claims, and recent cycles
-page agents start <project>          # Start autonomous execution loop for agents on a project
 ```
 
 ### Environment & Guidance Management (`page env`, `page guide`)
