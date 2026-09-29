@@ -1,0 +1,21 @@
+{
+  "name": "@sullux/page",
+  "version": "0.1.0",
+  "description": "Multi-agent orchestration and coordination engine for Pi coding agent swarms",
+  "bin": {
+    "page": "./bin/page"
+  },
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'"
+  },
+  "keywords": [
+    "pi",
+    "agent",
+    "orchestration",
+    "swarm",
+    "coordination"
+  ],
+  "author": "Charles Sullivan",
+  "license": "MIT"
+}
