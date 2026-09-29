@@ -19,7 +19,10 @@ The foundational design relies on two complementary pillars:
 - **Auditable & Vanilla JavaScript**: Built in clean, modern CommonJS (CJS) Node.js without TypeScript, transpilation, or heavy third-party runtimes. Uses Node's built-in test runner (`node:test`) and standard library.
 - **Functional Style**: Factories over classes, `const` over `let`, immutability over mutation, comprehensions over loops, and dependency injection for all non-deterministic operations (time, network, filesystem, child processes).
 - **Milliseconds Timestamps**: Native JavaScript epoch millisecond timestamps (`Date.now()`) across all internal state and data models.
-- **Physical Workspace Isolation**: Every agent gets its own directory tree (`~/agents/<agent>/<project-alias>/`). Agents never share local working trees or git staging areas.
+- **Physical Workspace Isolation & Profiles**: Every agent gets its own directory tree (`<profile-root>/<agent>/<project-alias>/`). Agents never share local working trees or git staging areas. Workspaces are partitioned by **Profiles** (e.g. `personal`, `work`) with separate roots, credentials, and drive mounts.
+- **Strict Project Agnosticism**: Target repositories remain 100% agnostic to how contributors choose to work. A project repo never contains `@sullux/page` in its dependencies or swarm-specific tooling committed into its tree. All orchestration, skills, and configuration reside in the profile and agent layers.
+- **Global Tooling as Canonical Source of Truth**: The installed `page` CLI is the single source of truth for coordination and orchestration. The `coordinate` skill is a thin caller invoking `page coord`.
+- **Zero-Downtime Hot Swapping**: When `page update` installs a new engine release, running agent loops detect the new binary between turns and gracefully re-exec without interrupting active Pi turns.
 - **Preserve Interactive TUI First**: Support individual terminal windows and tiled workspace grids where the human developer can watch Pi's live thinking, tool calls, and progress in real time, while architecting cleanly for headless/daemon execution in the future.
 - **Single GitHub Identity Swarms**: Recognize that all local agents typically authenticate under a single developer GitHub token/PAT (`@charles` or `@Sullux`). Coordination identity must live in the protocol comments (`agent: <callsign>`), never in GitHub's native user-assignee field.
 
@@ -27,18 +30,24 @@ The foundational design relies on two complementary pillars:
 
 ## 3. Directory Layout & Workspace Model
 
-The system cleanly separates global engine configuration, agent identity, project repositories, and instance-specific runtime configurations:
+The system cleanly separates global engine configuration, profile boundaries, agent identity, project repositories, and instance-specific runtime configurations.
+
+### 3.1 Global & Profile Architecture
 
 ```text
 ~/.config/page/                          # Global engine configuration
-├── config.json                          # Engine settings (workspace root, editor, defaults)
-├── projects.json                        # Project registry
-└── agents.json                          # Agent registry
+├── config.json                          # Engine settings & active profile pointer
+├── profiles.json                        # Profile registry (names -> filesystem paths)
+└── projects.json                        # Global project registry (aliases -> git remotes)
 
-~/agents/                                # Workspace root (configurable)
-├── .extension/                          # Centralized Pi extension (auto-compact & guidance)
-│   ├── index.js                         # Auto-compaction & system prompt injection
-│   └── package.json
+<profile-root>/                          # Profile root (e.g. ~/agents or /media/ext/work)
+├── .page/                               # Engine metadata & profile configuration
+│   ├── profile.json                     # Profile defaults (default model, thinking, etc.)
+│   └── profile.env                      # Profile-level environment secrets (API keys, tokens)
+│
+├── .agents/                             # Tooling-discoverable assets
+│   └── skills/                          # Skills discoverable by Pi and coding agents
+│       └── coordinate/                  # Canonical coordinate skill (invokes page coord)
 │
 ├── alpha/                               # Agent Workspace: Alpha
 │   ├── agent.json                       # Agent configuration (model, thinking, compaction)
@@ -48,8 +57,8 @@ The system cleanly separates global engine configuration, agent identity, projec
 │   │   ├── pp.md                        # Standing role guidance for Alpha on 'pp'
 │   │   └── pp.json                      # Per-project overrides (optional model/thinking)
 │   │
-│   ├── pp/                              # Git clone: Pitcairn Portal (alias: pp)
-│   └── carma/                           # Git clone: Carma (alias: carma)
+│   ├── pp/                              # Pristine git clone: Pitcairn Portal (alias: pp)
+│   └── carma/                           # Pristine git clone: Carma (alias: carma)
 │
 ├── bravo/                               # Agent Workspace: Bravo
 │   ├── agent.json
@@ -63,11 +72,18 @@ The system cleanly separates global engine configuration, agent identity, projec
     ...
 ```
 
-### Why Repos are Cloned per Agent
-Disk space is cheap; developer and agent attention is expensive. Dedicated clones eliminate Git workspace collisions:
-- No index locks or branch switching conflicts while an agent is running a build or test suite.
-- Agents can run uncommitted discrimination probes or worktrees without dirtying a peer's tree.
-- Long-running dev servers or test workers can hold open file handles without blocking other agents.
+### 3.2 Clean Separation of `.page` vs. `.agents`
+To keep orchestration tooling distinct from agent-discovered capabilities:
+1. **`.page/`** is reserved for `page` engine configuration, profile settings, and profile-level secrets (`profile.env`). It is ignored by agent LLM harnesses.
+2. **`.agents/skills/`** is structured for automatic framework discovery. The Pi framework traverses upward through parent directories (`..`, `../..`) from the active repository clone looking for `.agents/skills` or `.pi/skills`. Because the profile root hosts `.agents/skills/`, every agent and project clone within that profile automatically discovers the `coordinate` skill with zero repository configuration or symlink pollution.
+
+### 3.3 Strict Project Agnosticism & Per-Agent Clones
+Target repositories (`pp`, `carma`) are kept completely pristine:
+- **No swarm dependencies**: Projects do not have `@sullux/page` in their `package.json` or committed agent scripts.
+- **Dedicated Clones**: Disk space is cheap; developer and agent attention is expensive. Dedicated clones per agent eliminate Git workspace collisions:
+  - No index locks or branch switching conflicts while an agent is running a build or test suite.
+  - Agents can run uncommitted discrimination probes or worktrees without dirtying a peer's tree.
+  - Long-running dev servers or test workers can hold open file handles without blocking other agents.
 
 ---
 
@@ -218,6 +234,14 @@ The new engine implements **role-aware backlog resolution**:
 - Staggers agent polling intervals using slight randomized jitter (e.g. 60s ± 10s) to prevent simultaneous API burst calls.
 - Can designate PR review responsibilities to specific agents or round-robin review claims.
 
+### Hot-Swapping & Zero-Downtime Loop Reloading
+When an operator runs `page update` (or `npm i -g @sullux/page`), running agents must pick up the newly installed code seamlessly without crashing or requiring manual restarts:
+
+1. **Subprocess Invocations Are Instantly Hot**:
+   Because agents interact with coordination by executing `page coord <cmd>` as a child process from Pi, every coordination command immediately runs the newly installed code on disk.
+2. **Supervisor In-Place Re-exec**:
+   At the boundary of each loop cycle (during the idle countdown or inter-turn cooldown), the supervisor checks if the on-disk binary mtime or version has changed. If an update is detected, it logs `[page] Update detected: reloading supervisor...` and re-executes itself via `child_process.spawn(process.execPath, process.argv, { stdio: 'inherit' })` before exiting the old process. Active Pi turns finish their turns completely undisturbed.
+
 ### Clean Interruptibility & Lifecycle Control
 The runner maintains state in `~/.config/page/state/<agent>-<project>.json`:
 - **Graceful Stop**: `page stop <agent> <project>` sets `stopRequested: true`. The runner allows the current Pi turn to settle cleanly, executes any auto-compaction, releases locks, and exits without re-executing.
@@ -250,59 +274,63 @@ This eliminates filesystem path hacking and guarantees every agent has the exact
 
 ## 8. CLI Command Specification (`page`)
 
-The `page` CLI provides an ergonomic interface for managing projects, agents, configurations, and running swarms.
+The `page` CLI provides an ergonomic interface for managing profiles, projects, agents, configurations, and running swarms.
 
-### Global & Configuration
+### Global Options & Precedence
+The active profile is resolved in the following priority:
+1. CLI flag: `-p, --profile <name>`
+2. Environment variable: `PAGE_PROFILE`
+3. Active profile set via `page use <name>`
+4. Default fallback: `default` (auto-provisioned at `~/agents`)
+
 ```bash
-page config list                     # View all global configuration settings
-page config set <key> <value>        # Set configuration (e.g. editor nano, agentsRoot ~/agents)
+page -p work agents list             # Run command against the 'work' profile
+page update                          # Self-update page to the latest version via npm/yarn
 ```
 
-### Project Management (`page project`)
+### Profile Management (`page profiles`, `page use`)
 ```bash
-page project add <repo-or-url> [--alias <alias>] [--agents <list>]
-                                     # Register project, clone into assigned agent directories,
-                                     # setup coordinate labels/hub, and template .env files
-page project list                    # List registered projects, repos, aliases, and assigned agents
-page project show <alias>            # Show project details, branches, and active agent statuses
-page project edit <alias>            # Open project configuration/guidance in $EDITOR
-page project remove <alias> [--clean]# Remove project from registry (optionally delete agent clones)
+page profiles list                   # List all registered profiles (marks active with *)
+page profiles add <name> <path>      # Register a profile path (initializes .page/ and .agents/)
+page profiles remove <name>          # Unregister profile (leaves files intact)
+page profiles show [name]            # Show profile details, paths, and environment settings
+page use <name>                      # Set the active persistent profile
 ```
 
-### Agent Management (`page agent`)
+### Project Management (`page projects`)
 ```bash
-page agent add <name> [--model <m>] [--thinking <level>]
+page projects add <repo> [--alias <alias>]
+                                     # Register a project repository (clones into assigned agents)
+page projects list                   # List registered projects and aliases
+page projects show <alias>           # Show project details and assigned agents
+page projects remove <alias>         # Remove project from registry
+```
+
+### Agent Management (`page agents`)
+```bash
+page agents add <name> [--model <m>] [--thinking <level>]
                                      # Create agent directory, identity AGENTS.md, and configuration
-page agent list                      # List all agents, models, assigned projects, and statuses
-page agent show <name>               # Show agent details, active claims, and recent cycles
-page agent edit <name>               # Open agent AGENTS.md in $EDITOR
-page agent set <name> [--model <m>] [--thinking <level>]
-                                     # Update agent model/thinking settings
+page agents list                     # List all agents in the current profile
+page agents show <name>              # Show agent details, active claims, and recent cycles
+page agents start <project>          # Start autonomous execution loop for agents on a project
 ```
 
 ### Environment & Guidance Management (`page env`, `page guide`)
 ```bash
-page env edit <agent> <project>      # Open ~/agents/<agent>/projects/<project>.env in $EDITOR
+page env edit <agent> <project>      # Open <profile>/<agent>/projects/<project>.env in $EDITOR
 page env show <agent> <project>      # Print resolved environment variables for this agent/project
-page guide edit <agent> <project>    # Open ~/agents/<agent>/projects/<project>.md in $EDITOR
-```
-
-### Swarm Execution & Supervision (`page run`, `page stop`, `page status`)
-```bash
-page run <agent> <project> [--steering "message"]
-                                     # Run agent loop in foreground (interactive Pi TUI)
-page stop <agent> <project> [--kill] # Request graceful stop (or immediate kill)
-page status [project]                # Display live status table of agents, states, and claimed issues
+page guide edit <agent> <project>    # Open <profile>/<agent>/projects/<project>.md in $EDITOR
 ```
 
 ### Coordination Tooling (`page coord`)
 ```bash
 page coord sync                      # Synchronize with coordination board and hub
 page coord board                     # View open issues by workstream, status, owner, and files
-page coord claim <issue>             # Claim an issue with plan and files validation
-page coord release <issue>           # Release an issue claim
+page coord claim <issue> [--plan T]  # Claim an issue with plan and files validation
+page coord release <issue> [--reason]# Release an issue claim
 page coord status <issue> "text"     # Post heartbeat / status progress update
 page coord done <issue> [--pr <url>] # Complete issue and notify dependent issues
+page coord hub "text"                # Post high-level sync update to pinned hub issue
 ```
 
 ---
