@@ -27,7 +27,10 @@ const ProjectConfig = ({ fs, homeDir }) => {
     if (fs.mkdirSync) {
       fs.mkdirSync(projectsDir, { recursive: true })
     }
-    fs.writeFileSync(getProjectPath(alias), JSON.stringify(projectData, null, 2))
+    fs.writeFileSync(
+      getProjectPath(alias),
+      JSON.stringify(projectData, null, 2),
+    )
   }
 
   return {

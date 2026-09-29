@@ -29,7 +29,11 @@ describe('WorkspaceManager', () => {
     mgr.provisionInstanceFiles('alpha', 'portal', { defaultPort: 3001 })
 
     assert.ok(createdFiles['/mock/agents/alpha/projects/portal.env'])
-    assert.ok(createdFiles['/mock/agents/alpha/projects/portal.env'].includes('PORT=3001'))
+    assert.ok(
+      createdFiles['/mock/agents/alpha/projects/portal.env'].includes(
+        'PORT=3001',
+      ),
+    )
     assert.ok(createdFiles['/mock/agents/alpha/projects/portal.md'])
   })
 })

@@ -2,9 +2,12 @@ const path = require('node:path')
 const { parseEnv, formatEnv } = require('./env')
 
 const InstanceConfig = ({ fs, agentsRoot }) => {
-  const getProjectsDir = (agentName) => path.join(agentsRoot, agentName, 'projects')
-  const getEnvPath = (agentName, projectAlias) => path.join(getProjectsDir(agentName), `${projectAlias}.env`)
-  const getGuidancePath = (agentName, projectAlias) => path.join(getProjectsDir(agentName), `${projectAlias}.md`)
+  const getProjectsDir = (agentName) =>
+    path.join(agentsRoot, agentName, 'projects')
+  const getEnvPath = (agentName, projectAlias) =>
+    path.join(getProjectsDir(agentName), `${projectAlias}.env`)
+  const getGuidancePath = (agentName, projectAlias) =>
+    path.join(getProjectsDir(agentName), `${projectAlias}.md`)
 
   const loadEnv = (agentName, projectAlias) => {
     const file = getEnvPath(agentName, projectAlias)

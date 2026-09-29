@@ -7,6 +7,7 @@ describe('ConfigLoader', () => {
     const mockFs = {
       existsSync: () => false,
       readFileSync: () => '',
+      writeFileSync: () => {},
     }
     const loader = ConfigLoader({ fs: mockFs, homeDir: '/mock/home' })
     const system = loader.getSystemConfig()
@@ -19,7 +20,12 @@ describe('ConfigLoader', () => {
   it('merges existing system config over defaults', () => {
     const mockFs = {
       existsSync: (path) => path.includes('config.json'),
-      readFileSync: () => JSON.stringify({ defaultModel: 'custom:model', defaultThinking: 'off' }),
+      readFileSync: () =>
+        JSON.stringify({
+          defaultModel: 'custom:model',
+          defaultThinking: 'off',
+        }),
+      writeFileSync: () => {},
     }
     const loader = ConfigLoader({ fs: mockFs, homeDir: '/mock/home' })
     const system = loader.getSystemConfig()
@@ -31,7 +37,9 @@ describe('ConfigLoader', () => {
 
   it('resolves 4-tier environment variables correctly', () => {
     const files = {
-      '/mock/home/.config/page/config.json': JSON.stringify({ defaultEnv: { GLOBAL_VAR: 'global' } }),
+      '/mock/home/.config/page/config.json': JSON.stringify({
+        defaultEnv: { GLOBAL_VAR: 'global' },
+      }),
       '/mock/home/.config/page/projects/portal.json': JSON.stringify({
         repo: 'Sullux/pitcairn-portal',
         defaultEnv: { PORT: '3000', PROJECT_NAME: 'portal' },
@@ -41,12 +49,14 @@ describe('ConfigLoader', () => {
         thinking: 'medium',
         env: { AGENT_VAR: 'alpha-custom' },
       }),
-      '/mock/home/agents/alpha/projects/portal.env': 'PORT=3001\nINSTANCE_VAR=delta-test\n',
+      '/mock/home/agents/alpha/projects/portal.env':
+        'PORT=3001\nINSTANCE_VAR=delta-test\n',
     }
 
     const mockFs = {
       existsSync: (path) => Boolean(files[path]),
       readFileSync: (path) => files[path] || '',
+      writeFileSync: () => {},
     }
 
     const loader = ConfigLoader({ fs: mockFs, homeDir: '/mock/home' })

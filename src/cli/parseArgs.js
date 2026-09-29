@@ -1,6 +1,11 @@
 const parseArgs = (argv = []) => {
   const args = [...argv]
-  if (!args.length || args.includes('--help') || args.includes('-h') || args[0] === 'help') {
+  if (
+    !args.length ||
+    args.includes('--help') ||
+    args.includes('-h') ||
+    args[0] === 'help'
+  ) {
     return { command: 'help', positionals: [], flags: {} }
   }
 

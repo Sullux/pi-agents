@@ -3,12 +3,18 @@ const { execFileSync } = require('node:child_process')
 
 const WorkspaceManager = ({ fs, agentsRoot, exec = execFileSync } = {}) => {
   const getAgentDir = (agent) => path.join(agentsRoot, agent)
-  const getWorkspacePath = (agent, projectAlias) => path.join(getAgentDir(agent), projectAlias)
+  const getWorkspacePath = (agent, projectAlias) =>
+    path.join(getAgentDir(agent), projectAlias)
   const getProjectsDir = (agent) => path.join(getAgentDir(agent), 'projects')
 
-  const exists = (agent, projectAlias) => fs.existsSync(getWorkspacePath(agent, projectAlias))
+  const exists = (agent, projectAlias) =>
+    fs.existsSync(getWorkspacePath(agent, projectAlias))
 
-  const provisionInstanceFiles = (agent, projectAlias, { defaultPort } = {}) => {
+  const provisionInstanceFiles = (
+    agent,
+    projectAlias,
+    { defaultPort } = {},
+  ) => {
     const projDir = getProjectsDir(agent)
     if (!fs.existsSync(projDir) && fs.mkdirSync) {
       fs.mkdirSync(projDir, { recursive: true })
@@ -16,7 +22,9 @@ const WorkspaceManager = ({ fs, agentsRoot, exec = execFileSync } = {}) => {
 
     const envPath = path.join(projDir, `${projectAlias}.env`)
     if (!fs.existsSync(envPath)) {
-      const content = defaultPort ? `PORT=${defaultPort}\n` : '# Custom environment overrides\n'
+      const content = defaultPort
+        ? `PORT=${defaultPort}\n`
+        : '# Custom environment overrides\n'
       fs.writeFileSync(envPath, content)
     }
 

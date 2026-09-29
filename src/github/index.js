@@ -8,9 +8,29 @@ const resolveRepoFromRemote = (remoteUrl = '') => {
   return httpsMatch ? httpsMatch[1] : ''
 }
 
-const GitHubClient = ({ execFile = execFileSync, repo = '', cwd = process.cwd() } = {}) => {
+const GitHubClient = ({
+  execFile = execFileSync,
+  repo = '',
+  cwd = process.cwd(),
+} = {}) => {
+  const getRepo = () => {
+    if (repo) return repo
+    if (process.env.COORD_REPO) return process.env.COORD_REPO
+    try {
+      const remote = execFile('git', ['remote', 'get-url', 'origin'], {
+        cwd,
+        encoding: 'utf8',
+      })
+      return resolveRepoFromRemote(remote)
+    } catch {
+      return ''
+    }
+  }
+
+  const activeRepo = getRepo()
+
   const runGh = (args = []) => {
-    const fullArgs = repo ? [...args, '--repo', repo] : args
+    const fullArgs = activeRepo ? [...args, '--repo', activeRepo] : args
     const result = execFile('gh', fullArgs, { cwd, encoding: 'utf8' })
     return result?.toString()?.trim() || ''
   }
@@ -36,7 +56,13 @@ const GitHubClient = ({ execFile = execFileSync, repo = '', cwd = process.cwd() 
   }
 
   const viewIssue = async (number) => {
-    const raw = runGh(['issue', 'view', String(number), '--json', 'number,title,labels,comments,body'])
+    const raw = runGh([
+      'issue',
+      'view',
+      String(number),
+      '--json',
+      'number,title,labels,comments,body',
+    ])
     try {
       return JSON.parse(raw)
     } catch {
@@ -44,18 +70,37 @@ const GitHubClient = ({ execFile = execFileSync, repo = '', cwd = process.cwd() 
     }
   }
 
-  const commentIssue = async (number, body) => runGh(['issue', 'comment', String(number), '--body', body])
+  const commentIssue = async (number, body) =>
+    runGh(['issue', 'comment', String(number), '--body', body])
 
-  const editIssue = async (number, { addLabels = [], removeLabels = [] } = {}) => {
+  const editIssue = async (
+    number,
+    { addLabels = [], removeLabels = [] } = {},
+  ) => {
     const args = ['issue', 'edit', String(number)]
     if (addLabels.length) args.push('--add-label', addLabels.join(','))
     if (removeLabels.length) args.push('--remove-label', removeLabels.join(','))
     return runGh(args)
   }
 
+  const closeIssue = async (number) => runGh(['issue', 'close', String(number)])
+
+  const createIssue = async ({ title, body, labels = [] }) => {
+    const args = ['issue', 'create', '--title', title, '--body', body]
+    if (labels.length) args.push('--label', labels.join(','))
+    return runGh(args)
+  }
+
   const listPrs = async (options = {}) => {
     const state = options.state || 'open'
-    const raw = runGh(['pr', 'list', '--state', state, '--json', 'number,title,labels,headRefName,state'])
+    const raw = runGh([
+      'pr',
+      'list',
+      '--state',
+      state,
+      '--json',
+      'number,title,labels,headRefName,state',
+    ])
     try {
       return JSON.parse(raw)
     } catch {
@@ -64,11 +109,14 @@ const GitHubClient = ({ execFile = execFileSync, repo = '', cwd = process.cwd() 
   }
 
   return {
+    repo: activeRepo,
     runGh,
     listIssues,
     viewIssue,
     commentIssue,
     editIssue,
+    closeIssue,
+    createIssue,
     listPrs,
   }
 }

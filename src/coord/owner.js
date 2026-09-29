@@ -10,7 +10,9 @@ const PROTOCOL_REGEX = /^\*\*(CLAIM|RELEASE|HANDOFF|DONE)\*\*/
 
 const ownerOf = (issue) => {
   const comments = issue?.comments || []
-  const protocolComments = comments.filter((c) => PROTOCOL_REGEX.test(c.body?.trim()))
+  const protocolComments = comments.filter((c) =>
+    PROTOCOL_REGEX.test(c.body?.trim()),
+  )
   if (!protocolComments.length) return ''
 
   const lastComment = protocolComments[protocolComments.length - 1]

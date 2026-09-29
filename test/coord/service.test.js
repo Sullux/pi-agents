@@ -35,7 +35,11 @@ describe('CoordService', () => {
     const result = await coord.claim(42, { plan: 'my plan', eta: '10m' })
     assert.equal(result.ok, true)
     assert.equal(commentsPosted.length, 1)
-    assert.ok(commentsPosted[0].body.includes('**CLAIM** | agent: agent-alpha | human: @Sullux'))
+    assert.ok(
+      commentsPosted[0].body.includes(
+        '**CLAIM** | agent: agent-alpha | human: @Sullux',
+      ),
+    )
     assert.ok(commentsPosted[0].body.includes('at: 1700000000000'))
     assert.equal(labelsEdited.length, 1)
     assert.deepEqual(labelsEdited[0].edits.addLabels, ['status:claimed'])

@@ -22,7 +22,10 @@ const Runner = ({
       const availability = await checkBacklogAvailability({ github, agent })
 
       if (availability.status === 'idle_empty') {
-        const cancelled = await waitImpl(availability.waitSeconds, '[Backlog Empty] No open issues in repository.')
+        const cancelled = await waitImpl(
+          availability.waitSeconds,
+          '[Backlog Empty] No open issues in repository.',
+        )
         if (cancelled) return { stopped: true, reason: 'user_exit', cycle }
         continue
       }
@@ -47,8 +50,12 @@ const Runner = ({
       cycle += 1
 
       // 10s cooldown between sessions
-      const cancelledCooldown = await waitImpl(10, '[Session Complete] Waiting 10s cooldown before next cycle.')
-      if (cancelledCooldown) return { stopped: true, reason: 'user_exit', cycle }
+      const cancelledCooldown = await waitImpl(
+        10,
+        '[Session Complete] Waiting 10s cooldown before next cycle.',
+      )
+      if (cancelledCooldown)
+        return { stopped: true, reason: 'user_exit', cycle }
     }
 
     return { stopped: true, reason: 'max_cycles_reached', cycle }

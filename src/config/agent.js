@@ -2,7 +2,8 @@ const path = require('node:path')
 
 const AgentConfig = ({ fs, agentsRoot }) => {
   const getAgentDir = (name) => path.join(agentsRoot, name)
-  const getAgentConfigPath = (name) => path.join(getAgentDir(name), 'agent.json')
+  const getAgentConfigPath = (name) =>
+    path.join(getAgentDir(name), 'agent.json')
 
   const load = (name) => {
     const file = getAgentConfigPath(name)
@@ -20,6 +21,7 @@ const AgentConfig = ({ fs, agentsRoot }) => {
       .readdirSync(agentsRoot, { withFileTypes: true })
       .filter((d) => (d.isDirectory ? d.isDirectory() : true))
       .map((d) => (typeof d === 'string' ? d : d.name))
+      .filter((name) => !name.startsWith('.'))
   }
 
   const save = (name, agentData) => {

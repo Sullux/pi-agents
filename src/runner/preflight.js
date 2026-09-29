@@ -16,7 +16,9 @@ const isActionableUnclaimed = (issue) => {
 
 const checkBacklogAvailability = async ({ github, agent = '' }) => {
   const issues = await github.listIssues()
-  const nonHubIssues = issues.filter((i) => !i.labels?.some((l) => l.name === 'hub'))
+  const nonHubIssues = issues.filter(
+    (i) => !i.labels?.some((l) => l.name === 'hub'),
+  )
 
   if (!nonHubIssues.length) {
     return {

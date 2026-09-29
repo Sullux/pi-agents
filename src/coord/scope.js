@@ -10,7 +10,11 @@ const parseScope = (body = '') => {
     .filter((line) => line && !line.startsWith('_(') && !line.startsWith('#'))
 }
 
-const checkScopeCollision = (targetFiles = [], activeIssues = [], currentAgent = '') => {
+const checkScopeCollision = (
+  targetFiles = [],
+  activeIssues = [],
+  currentAgent = '',
+) => {
   const cleanCurrent = cleanAgent(currentAgent)
 
   for (const issue of activeIssues) {

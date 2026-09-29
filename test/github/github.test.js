@@ -4,9 +4,18 @@ const { GitHubClient, resolveRepoFromRemote } = require('../../src/github')
 
 describe('GitHubClient', () => {
   it('resolveRepoFromRemote parses SSH, HTTPS, and git suffix URLs', () => {
-    assert.equal(resolveRepoFromRemote('git@github.com:Sullux/pitcairn-portal.git'), 'Sullux/pitcairn-portal')
-    assert.equal(resolveRepoFromRemote('https://github.com/Sullux/pitcairn-portal.git'), 'Sullux/pitcairn-portal')
-    assert.equal(resolveRepoFromRemote('https://github.com/Sullux/pitcairn-portal'), 'Sullux/pitcairn-portal')
+    assert.equal(
+      resolveRepoFromRemote('git@github.com:Sullux/pitcairn-portal.git'),
+      'Sullux/pitcairn-portal',
+    )
+    assert.equal(
+      resolveRepoFromRemote('https://github.com/Sullux/pitcairn-portal.git'),
+      'Sullux/pitcairn-portal',
+    )
+    assert.equal(
+      resolveRepoFromRemote('https://github.com/Sullux/pitcairn-portal'),
+      'Sullux/pitcairn-portal',
+    )
   })
 
   it('listIssues executes gh issue list with correct json flags', async () => {
@@ -16,7 +25,10 @@ describe('GitHubClient', () => {
       return JSON.stringify([{ number: 1, title: 'test issue' }])
     }
 
-    const client = GitHubClient({ execFile: mockExec, repo: 'Sullux/pitcairn-portal' })
+    const client = GitHubClient({
+      execFile: mockExec,
+      repo: 'Sullux/pitcairn-portal',
+    })
     const issues = await client.listIssues()
 
     assert.equal(issues.length, 1)

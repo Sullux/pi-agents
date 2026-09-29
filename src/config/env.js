@@ -8,7 +8,10 @@ const parseEnv = (content = '') =>
       if (equalsIdx === -1) return acc
       const key = line.slice(0, equalsIdx).trim()
       let val = line.slice(equalsIdx + 1).trim()
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      if (
+        (val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))
+      ) {
         val = val.slice(1, -1)
       }
       return { ...acc, [key]: val }

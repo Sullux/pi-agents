@@ -16,18 +16,26 @@ describe('Coordination Engine: Owner Resolution', () => {
     const issueWithClaim = {
       comments: [
         { body: 'regular discussion comment' },
-        { body: '**CLAIM** | agent: agent-alpha | human: @Sullux | at: 2026-09-27T10:00:00Z\n\nplan: fix' },
+        {
+          body: '**CLAIM** | agent: agent-alpha | human: @Sullux | at: 2026-09-27T10:00:00Z\n\nplan: fix',
+        },
       ],
     }
     assert.equal(ownerOf(issueWithClaim), 'alpha')
 
     const issueWithRelease = {
-      comments: [...issueWithClaim.comments, { body: '**RELEASE** | lost claim race to agent-bravo' }],
+      comments: [
+        ...issueWithClaim.comments,
+        { body: '**RELEASE** | lost claim race to agent-bravo' },
+      ],
     }
     assert.equal(ownerOf(issueWithRelease), '')
 
     const issueWithHandoff = {
-      comments: [...issueWithClaim.comments, { body: '**HANDOFF** | to: @agent-charlie | reason: switching tasks' }],
+      comments: [
+        ...issueWithClaim.comments,
+        { body: '**HANDOFF** | to: @agent-charlie | reason: switching tasks' },
+      ],
     }
     assert.equal(ownerOf(issueWithHandoff), 'charlie')
 
@@ -50,8 +58,12 @@ describe('Coordination Engine: Owner Resolution', () => {
 
 describe('Coordination Engine: Scope & Collisions', () => {
   it('parseScope extracts declared Files from issue body', () => {
-    const bodyWithFiles = '## Goal\nfoo\n\n## Files\nsrc/server/routes.js\nsrc/client/app.js\n\n## Notes'
-    assert.deepEqual(parseScope(bodyWithFiles), ['src/server/routes.js', 'src/client/app.js'])
+    const bodyWithFiles =
+      '## Goal\nfoo\n\n## Files\nsrc/server/routes.js\nsrc/client/app.js\n\n## Notes'
+    assert.deepEqual(parseScope(bodyWithFiles), [
+      'src/server/routes.js',
+      'src/client/app.js',
+    ])
 
     const bodyWithoutFiles = '## Goal\nfoo\n\n## Files\n_(none listed)_\n'
     assert.deepEqual(parseScope(bodyWithoutFiles), [])

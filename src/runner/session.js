@@ -9,7 +9,10 @@ const runPiSession = async ({
   env = {},
   spawnImpl = spawn,
 } = {}) => {
-  const extensionPath = path.resolve(__dirname, '../../pi/extensions/auto-compact.ts')
+  const extensionPath = path.resolve(
+    __dirname,
+    '../../pi/extensions/auto-compact.ts',
+  )
   const args = ['--continue', '--approve']
 
   if (model) args.push('--model', model)
