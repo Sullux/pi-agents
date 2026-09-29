@@ -1,0 +1,14 @@
+#!/usr/bin/env node
+
+const { Cli } = require('../src/cli')
+
+const cli = Cli()
+cli
+  .run()
+  .then((exitCode) => {
+    process.exit(exitCode || 0)
+  })
+  .catch((err) => {
+    console.error(err)
+    process.exit(1)
+  })
