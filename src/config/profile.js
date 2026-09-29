@@ -10,7 +10,7 @@ const ProfileManager = ({
   const configPath = path.join(configDir, 'config.json')
 
   const loadConfig = () => {
-    if (!fs.existsSync(configPath)) return {}
+    if (!fs.existsSync || !fs.existsSync(configPath)) return {}
     try {
       return JSON.parse(fs.readFileSync(configPath, 'utf8'))
     } catch {
@@ -39,35 +39,23 @@ const ProfileManager = ({
       fs.writeFileSync(profilesPath, JSON.stringify(data, null, 2))
   }
 
-  const resolveActiveProfileName = (flags = {}, env = process.env) => {
-    if (flags.profile || flags.p) return flags.profile || flags.p
-    if (env.PAGE_PROFILE) return env.PAGE_PROFILE
-    const cfg = loadConfig()
-    if (cfg.activeProfile) return cfg.activeProfile
-    return 'default'
-  }
-
-  const listProfiles = () => {
-    const profiles = loadProfiles()
-    return Object.entries(profiles).map(([name, data]) => ({
-      name,
-      ...data,
-    }))
-  }
-
-  const getProfile = (name) => {
-    const profiles = loadProfiles()
-    return profiles[name] ? { name, ...profiles[name] } : undefined
-  }
-
-  const addProfile = (name, targetPath, options = {}) => {
-    const resolvedPath = path.resolve(targetPath.replace(/^~/, homeDir))
-    const pageDir = path.join(resolvedPath, '.page')
-    const agentsDir = path.join(resolvedPath, '.agents', 'skills')
+  const ensureProfileStructure = (
+    targetPath,
+    name = 'default',
+    options = {},
+  ) => {
+    const pageDir = path.join(targetPath, '.page')
+    const skillScriptsDir = path.join(
+      targetPath,
+      '.agents',
+      'skills',
+      'coordinate',
+      'scripts',
+    )
 
     if (fs.mkdirSync) {
       fs.mkdirSync(pageDir, { recursive: true })
-      fs.mkdirSync(agentsDir, { recursive: true })
+      fs.mkdirSync(skillScriptsDir, { recursive: true })
     }
 
     const profileJsonPath = path.join(pageDir, 'profile.json')
@@ -91,6 +79,64 @@ const ProfileManager = ({
         '# Profile-level secrets and environment overrides\n',
       )
     }
+
+    const skillRoot = path.join(targetPath, '.agents', 'skills', 'coordinate')
+    const skillMdPath = path.join(skillRoot, 'SKILL.md')
+    if (fs.existsSync && !fs.existsSync(skillMdPath) && fs.writeFileSync) {
+      const sourceSkill = path.resolve(
+        __dirname,
+        '../../.agents/skills/coordinate/SKILL.md',
+      )
+      if (fs.existsSync(sourceSkill) && fs.readFileSync) {
+        fs.writeFileSync(skillMdPath, fs.readFileSync(sourceSkill, 'utf8'))
+      }
+    }
+
+    const coordJsPath = path.join(skillScriptsDir, 'coord.js')
+    if (fs.existsSync && !fs.existsSync(coordJsPath) && fs.writeFileSync) {
+      fs.writeFileSync(
+        coordJsPath,
+        `#!/usr/bin/env node\nconst { spawnSync } = require('node:child_process')\nspawnSync('page', ['coord', ...process.argv.slice(2)], { stdio: 'inherit', env: process.env })\n`,
+      )
+      if (fs.chmodSync) fs.chmodSync(coordJsPath, 0o755)
+    }
+
+    const coordShPath = path.join(skillScriptsDir, 'coord.sh')
+    if (fs.existsSync && !fs.existsSync(coordShPath) && fs.writeFileSync) {
+      fs.writeFileSync(
+        coordShPath,
+        `#!/usr/bin/env bash\nexec node "$(dirname "$0")/coord.js" "$@"\n`,
+      )
+      if (fs.chmodSync) fs.chmodSync(coordShPath, 0o755)
+    }
+  }
+
+  const resolveActiveProfileName = (flags = {}, env = process.env) => {
+    if (flags.profile || flags.p) return flags.profile || flags.p
+    if (env.PAGE_PROFILE) return env.PAGE_PROFILE
+    const cfg = loadConfig()
+    if (cfg.activeProfile) return cfg.activeProfile
+    return 'default'
+  }
+
+  const listProfiles = () => {
+    const profiles = loadProfiles()
+    return Object.entries(profiles).map(([name, data]) => ({
+      name,
+      ...data,
+    }))
+  }
+
+  const getProfile = (name) => {
+    const profiles = loadProfiles()
+    if (!profiles[name]) return undefined
+    ensureProfileStructure(profiles[name].path, name)
+    return { name, ...profiles[name] }
+  }
+
+  const addProfile = (name, targetPath, options = {}) => {
+    const resolvedPath = path.resolve(targetPath.replace(/^~/, homeDir))
+    ensureProfileStructure(resolvedPath, name, options)
 
     const profiles = loadProfiles()
     profiles[name] = {
@@ -130,6 +176,7 @@ const ProfileManager = ({
     removeProfile,
     resolveActiveProfileName,
     useProfile,
+    ensureProfileStructure,
   }
 }
 
