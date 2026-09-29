@@ -4,7 +4,8 @@ const { ConfigLoader } = require('../config')
 const { WorkspaceManager } = require('../workspace')
 const { GitHubClient } = require('../github')
 const { CoordService } = require('../coord')
-const { Runner } = require('../runner')
+const { Runner, SessionTracker } = require('../runner')
+const { pad } = require('../coord/formatters')
 
 const printHelp = () => {
   console.log(`
@@ -13,26 +14,30 @@ Usage: page <command> [subcommand] [args...] [flags]
 Global Flags:
   -p, --profile <name>               Target a specific profile (default: active profile)
 
-Commands:
+Session Commands:
+  start <agent> <project>            Start single autonomous agent session in this terminal
+  stop <agent> [--kill]              Stop an active agent session
+  status [project]                   Display active agent sessions
+
+Profile Commands:
   profiles list                      List all registered profiles (* marks active)
   profiles add <name> <path>         Register a profile root directory
   profiles remove <name>             Unregister a profile
   profiles show [name]               Show profile details
   use <name>                         Set active persistent profile
 
+Project Commands:
   projects list                      List registered projects
   projects add <repo> [--alias <a>]  Register a project repository
   projects show <alias>              Show project details
   projects remove <alias>            Unregister a project
 
+Agent Commands:
   agents list                        List registered agents
   agents add <name> [--model <m>]    Register an agent
   agents show <name>                 Show agent details
-  agents start <project>             Start autonomous execution loop
 
-  env show <agent> <project>         Show resolved environment variables
-  update                             Self-update page to latest version
-
+Coordination Commands:
   coord board [--repo <r>]           Display coordination board
   coord sync                         Synchronize status, claims, and hub
   coord claim <issue> [--plan <p>]   Claim an issue
@@ -40,11 +45,25 @@ Commands:
   coord status <issue> <text>        Post heartbeat progress update
   coord done <issue> [--pr <n>]      Mark issue completed
   coord hub <text>                   Post update to coordination hub
+
+System Commands:
+  env show <agent> <project>         Show resolved environment variables
+  update                             Self-update page to latest version
 `)
+}
+
+const formatUptime = (ms = 0) => {
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h ${minutes % 60}m`
 }
 
 const Cli = ({
   configLoader: customLoader,
+  sessionTracker: customTracker,
   stdout = console.log,
   stderr = console.error,
 } = {}) => {
@@ -57,6 +76,8 @@ const Cli = ({
     }
 
     const loader = customLoader || ConfigLoader({ flags })
+    const tracker =
+      customTracker || SessionTracker({ agentsRoot: loader.agentsRoot })
 
     if (command === 'use') {
       const name = positionals[0]
@@ -149,7 +170,6 @@ const Cli = ({
             .replace(/\.git$/, '')
         loader.project.save(alias, { repo, defaultEnv: {} })
 
-        // Auto-provision clones for existing agents in profile
         const agents = loader.agent.list()
         if (agents.length) {
           const ws = WorkspaceManager({
@@ -202,7 +222,6 @@ const Cli = ({
           env: {},
         })
 
-        // Provision clones/instance files for all registered projects
         const projects = loader.project.list()
         const ws = WorkspaceManager({
           fs: require('node:fs'),
@@ -225,39 +244,85 @@ const Cli = ({
         stdout(JSON.stringify(ag, null, 2))
         return 0
       }
-      if (sub === 'start') {
-        const project = positionals[1]
-        if (!project) {
-          stderr('Usage: page agents start <project> [--agent <name>]')
-          return 1
-        }
-        const agents = loader.agent.list()
-        const targetAgent = flags.agent || agents[0] || 'alpha'
-        const sys = loader.getSystemConfig()
-        const ag = loader.agent.load(targetAgent) || {}
-        const env = loader.resolveInstanceEnv(targetAgent, project)
-        const ws = WorkspaceManager({
-          fs: require('node:fs'),
-          agentsRoot: loader.agentsRoot,
-        })
-        const targetPath = ws.getWorkspacePath(targetAgent, project)
-        const github = GitHubClient({ cwd: targetPath })
+    }
 
-        const runner = Runner({
-          github,
-          agent: targetAgent,
-          targetPath,
-          model: flags.model || ag.model || sys.defaultModel,
-          thinking: flags.thinking || ag.thinking || sys.defaultThinking,
-          env,
-        })
-
-        const maxCycles = flags['max-cycles']
-          ? Number(flags['max-cycles'])
-          : Infinity
-        const result = await runner.runLoop({ maxCycles })
-        return result.stopped ? 0 : 1
+    if (command === 'status') {
+      const projectFilter = positionals[0]
+      const sessions = tracker.listSessions(projectFilter)
+      if (!sessions.length) {
+        stdout(
+          projectFilter
+            ? `No active agent sessions running for project '${projectFilter}'.`
+            : 'No active agent sessions running.',
+        )
+        return 0
       }
+
+      const header = `${pad('AGENT', 12)} ${pad('PROJECT', 12)} ${pad('PID', 8)} ${pad('STATUS', 16)} ${pad('UPTIME', 10)}`
+      const lines = [header]
+
+      for (const s of sessions) {
+        const uptime = formatUptime(Date.now() - s.startedAt)
+        lines.push(
+          `${pad(s.agent, 12)} ${pad(s.project, 12)} ${pad(String(s.pid), 8)} ${pad(s.status, 16)} ${pad(uptime, 10)}`,
+        )
+      }
+      stdout(lines.join('\n'))
+      return 0
+    }
+
+    if (command === 'stop') {
+      const agent = positionals[0]
+      if (!agent) {
+        stderr('Usage: page stop <agent> [--kill]')
+        return 1
+      }
+      const res = tracker.stopSession(agent, { kill: Boolean(flags.kill) })
+      if (!res.ok) {
+        stderr(`Error: ${res.error}`)
+        return 1
+      }
+      stdout(`Stopped agent '${agent}' (pid: ${res.pid})`)
+      return 0
+    }
+
+    if (command === 'start' || command === 'run') {
+      const [agent, project] = positionals
+      if (!agent || !project) {
+        stderr(`Usage: page ${command} <agent> <project> [--steering <msg>]`)
+        return 1
+      }
+
+      const sys = loader.getSystemConfig()
+      const ag = loader.agent.load(agent) || {}
+      const env = loader.resolveInstanceEnv(agent, project)
+      const workspace = WorkspaceManager({
+        fs: require('node:fs'),
+        agentsRoot: loader.agentsRoot,
+      })
+      const targetPath = workspace.getWorkspacePath(agent, project)
+      const github = GitHubClient({ cwd: targetPath })
+
+      stdout(`[page] Starting agent '${agent}' on project '${project}'...`)
+      stdout(`[page] Working directory: ${targetPath}`)
+
+      const runner = Runner({
+        github,
+        agent,
+        project,
+        targetPath,
+        steering: flags.steering || '',
+        model: flags.model || ag.model || sys.defaultModel,
+        thinking: flags.thinking || ag.thinking || sys.defaultThinking,
+        env,
+        sessionTracker: tracker,
+      })
+
+      const maxCycles = flags['max-cycles']
+        ? Number(flags['max-cycles'])
+        : Infinity
+      const result = await runner.runLoop({ maxCycles })
+      return result.stopped ? 0 : 1
     }
 
     if (command === 'update') {
@@ -336,38 +401,6 @@ const Cli = ({
         stdout(`Marked #${issueNum} done`)
         return 0
       }
-    }
-
-    if (command === 'run') {
-      const [agent, project] = positionals
-      if (!agent || !project) {
-        stderr('Usage: page run <agent> <project>')
-        return 1
-      }
-      const sys = loader.getSystemConfig()
-      const ag = loader.agent.load(agent) || {}
-      const env = loader.resolveInstanceEnv(agent, project)
-      const workspace = WorkspaceManager({
-        fs: require('node:fs'),
-        agentsRoot: loader.agentsRoot,
-      })
-      const targetPath = workspace.getWorkspacePath(agent, project)
-      const github = GitHubClient({ cwd: targetPath })
-
-      const runner = Runner({
-        github,
-        agent,
-        targetPath,
-        model: flags.model || ag.model || sys.defaultModel,
-        thinking: flags.thinking || ag.thinking || sys.defaultThinking,
-        env,
-      })
-
-      const maxCycles = flags['max-cycles']
-        ? Number(flags['max-cycles'])
-        : Infinity
-      const result = await runner.runLoop({ maxCycles })
-      return result.stopped ? 0 : 1
     }
 
     printHelp()

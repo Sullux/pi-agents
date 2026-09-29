@@ -28,13 +28,7 @@ const waitInterruptible = async (
 
     const onData = (data) => {
       const key = data.toString()
-      if (
-        key === '\u001B' ||
-        key === 'q' ||
-        key === 'Q' ||
-        key === '\r' ||
-        key === '\n'
-      ) {
+      if (key === '\u001b' || key === 'q' || key === 'Q' || key === '\u0003') {
         stdout.write('\n[Agent Loop] User requested exit.\n')
         cleanup(true)
       }
@@ -49,7 +43,7 @@ const waitInterruptible = async (
     const render = () => {
       const remaining = Math.max(0, seconds - elapsed)
       stdout.write(
-        `\r  Waiting ${String(remaining).padStart(2, ' ')}s... Press ESC, 'q', or Enter to stop the loop.`,
+        `\r  Waiting ${String(remaining).padStart(2, ' ')}s... Press ESC or 'q' to stop the loop.`,
       )
       if (elapsed >= seconds) {
         cleanup(false)

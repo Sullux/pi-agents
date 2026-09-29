@@ -83,4 +83,42 @@ describe('CLI Commands', () => {
     assert.ok(saved.pp)
     assert.equal(saved.pp.repo, 'Sullux/pitcairn-portal')
   })
+
+  it('handles status and stop commands', async () => {
+    let output = []
+    const mockTracker = {
+      listSessions: () => [
+        {
+          agent: 'alpha',
+          project: 'pp',
+          pid: 1234,
+          status: 'running',
+          startedAt: Date.now() - 60000,
+        },
+      ],
+      stopSession: (agent) => ({ ok: true, pid: 1234 }),
+    }
+
+    const mockLoader = {
+      agentsRoot: '/mock/agents',
+      project: { load: () => undefined },
+    }
+
+    const cli = Cli({
+      configLoader: mockLoader,
+      sessionTracker: mockTracker,
+      stdout: (msg) => output.push(msg),
+      stderr: (msg) => output.push(`ERR: ${msg}`),
+    })
+
+    // status
+    await cli.run(['status'])
+    assert.ok(output[0].includes('alpha'))
+    assert.ok(output[0].includes('1234'))
+
+    // stop
+    output = []
+    await cli.run(['stop', 'alpha'])
+    assert.ok(output[0].includes("Stopped agent 'alpha' (pid: 1234)"))
+  })
 })

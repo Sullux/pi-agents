@@ -3,7 +3,8 @@ const path = require('node:path')
 
 const runPiSession = async ({
   targetPath,
-  prompt = 'Proceed with development using the coordinate skill.',
+  prompt,
+  steering = '',
   model,
   thinking,
   env = {},
@@ -18,7 +19,13 @@ const runPiSession = async ({
   if (model) args.push('--model', model)
   if (thinking) args.push('--thinking', thinking)
   if (extensionPath) args.push('--extension', extensionPath)
-  args.push(prompt)
+
+  const basePrompt =
+    prompt || 'Proceed with development using the coordinate skill.'
+  const fullPrompt = steering
+    ? `${basePrompt} Explicit steering from user: ${steering}`
+    : basePrompt
+  args.push(fullPrompt)
 
   const childEnv = {
     ...process.env,
