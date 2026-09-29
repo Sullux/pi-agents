@@ -28,7 +28,9 @@ rules (label transitions, race checks, stale detection). Run it from
 anywhere inside the repo:
 
 ```bash
-COORD="bash .agents/skills/coordinate/scripts/coord.sh"
+COORD="node .agents/skills/coordinate/scripts/coord.js"
+# or backward-compatible shim:
+# COORD="bash .agents/skills/coordinate/scripts/coord.sh"
 ```
 
 ## Identity
@@ -197,6 +199,18 @@ need to parse comments yourself or hit a case not covered above.
 
 ## Working agreements, and why
 
+### Ratified Issue-Dedup Protocol (Standing Rules)
+
+- **Rule A (Signature Pre-File Scan)**: Before filing an issue, scan the board and run `gh issue list --search` for the specific **failure signature** (failing test name, file path, error substring) rather than general title topics. Cite the closest matching issue in the body.
+- **Rule B (Twin Resolution Taxonomy)**:
+  1. **Subsumed-Empty**: If one PR adds zero net lines vs the other, close with convergent credit + transfer measurements (no empty merges).
+  2. **Union-Carry**: If both PRs contribute useful code, the second branch merges the union of both solutions.
+  3. **Cede-with-Credit**: If one PR is strictly worse, close it—verifying the surviving PR is still open first.
+- **Rule C (Claim Comment Authority)**: Earliest `**CLAIM**` comment timestamp wins ties. Single GitHub accounts use protocol comments as the source of truth, not GitHub assignees.
+- **Rule D (Inventory Honesty)**: Coverage and fixme lists must cite live truth so agents do not misdirect work.
+
+### General Invariants
+
 - **Issue before file.** Unclaimed work is invisible work; two agents will
   do it twice. A claim without branch/PR/no-code state is incomplete.
 - **Talk in verbs.** Humans can write free text; agents skim by verb.
@@ -208,9 +222,7 @@ need to parse comments yourself or hit a case not covered above.
 - **Escalate early.** `needs-human` is not failure; it is the fastest
   path when two agents lack the context to choose.
 - **Read before you write.** `sync` takes ten seconds. A merge
-  conflict on `useOsStore` takes twenty minutes.
-- **Reference the ADRs.** When a contract changes an architectural
-  decision, say so and link the ADR; if it sticks it becomes ADR 0011.
+  conflict takes twenty minutes.
 
 ## Labels
 
