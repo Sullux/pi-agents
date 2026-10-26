@@ -260,3 +260,117 @@ describe('Coordination Engine: Race Arbitration', () => {
     assert.equal(evaluateClaimRace([], 'delta').won, true)
   })
 })
+
+// #816: parseScope's heading match was UNANCHORED - `/## Files\s*([\s\S]*?)(?:\n##|$)/` matched
+// the first occurrence of that character sequence anywhere in the body, not a heading at the
+// start of a line. An issue ABOUT the Files section has to mention the heading in prose, so the
+// match landed on the mention and its prose became the scope while the declared paths were
+// dropped entirely. Fenced examples had the same effect from the other direction.
+describe('Coordination Engine: Scope Parsing (#816)', () => {
+  it('anchors the Files heading to a line start, so prose that mentions it is not scope', () => {
+    const body = [
+      '# Bug: the Files section parser',
+      '',
+      'An issue ABOUT the Files section has to mention ## Files in prose, so the match lands here.',
+      'It captures everything up to the next H2 as scope.',
+      '',
+      '## Goal',
+      'fix it',
+      '',
+      '## Files',
+      'src/coord/scope.js',
+      'test/coord/coord.test.js',
+      '',
+      '## Notes',
+      'none',
+    ].join('\n')
+
+    const scope = parseScope(body)
+    assert.deepEqual(scope, ['src/coord/scope.js', 'test/coord/coord.test.js'])
+    // the two halves of the defect, separately: prose must not be scope, and the real paths
+    // must not be lost. Asserting only the first would pass on a parser that returns [].
+    assert.equal(
+      scope.some((entry) => entry.includes('prose')),
+      false,
+      'prose from the mention is not scope',
+    )
+    assert.ok(scope.length > 0, 'the declared paths were still parsed')
+  })
+
+  it('skips fenced code blocks, so a documented example is not scope', () => {
+    const body = [
+      '## Goal',
+      'Document the expected shape:',
+      '```md',
+      '## Files',
+      'docs/example/path.js',
+      '```',
+      '',
+      '## Files',
+      'src/real/path.js',
+    ].join('\n')
+
+    assert.deepEqual(parseScope(body), ['src/real/path.js'])
+  })
+
+  it('does not open a Files section from inside a fence at all', () => {
+    const body = ['## Goal', '```md', '## Files', 'docs/example/path.js', '```', ''].join('\n')
+
+    assert.deepEqual(parseScope(body), [])
+  })
+
+  it('keeps the existing section and comment behaviour', () => {
+    // an H2 closes the section, as the old `\n##` terminator did
+    assert.deepEqual(parseScope('## Files\nsrc/a.js\n\n## Notes\nsrc/not-scope.js'), ['src/a.js'])
+    // an H3 subsection stays content and is dropped by the `#` filter, rather than closing it
+    assert.deepEqual(parseScope('## Files\n### Backend\nsrc/a.js'), ['src/a.js'])
+    // `_(none listed)_` placeholders and `#` comments are still dropped
+    assert.deepEqual(parseScope('## Files\n_(none listed)_\n# a comment\n'), [])
+    // no Files section at all
+    assert.deepEqual(parseScope('## Goal\nnothing declared'), [])
+  })
+
+  it('a prose subsection inside Files cannot fabricate a collision (#800 case)', () => {
+    // #800 was refused by the bash variant with "scope overlaps #747 on: the,the,the,for,the..."
+    // - English function words from a prose subsection, matched word-for-word against an
+    // unrelated issue's Files list. The canonical gate compares whole lines, so prose cannot
+    // equal a path. Pinned here so that stays true if the gate is ever retokenized.
+    const annotatedRoute = {
+      number: 747,
+      body: '## Files\nsrc/sites/admin/src/pages/bookings.astro\npublic/js/admin/bookings.js',
+      comments: [{ body: '**CLAIM** | agent: agent-delta' }],
+    }
+    const proseAnnotated = {
+      number: 800,
+      body: [
+        '## Files',
+        'test/e2e/clock-shim.cjs',
+        '',
+        '### Narrowing',
+        'the harness only, not the engine - for the clock, the +the pinned instant is the fix',
+        '',
+        '## Notes',
+        'none',
+      ].join('\n'),
+      comments: [{ body: '**CLAIM** | agent: agent-bravo' }],
+    }
+
+    const scope = parseScope(proseAnnotated.body)
+    // The declared path survives, and an H3 subsection heading does not close the section.
+    assert.ok(scope.includes('test/e2e/clock-shim.cjs'), 'the declared path is scope')
+    assert.equal(
+      scope.some((entry) => entry.startsWith('#')),
+      false,
+      'the H3 heading is not a scope entry',
+    )
+    // Prose INSIDE the Files section is still taken as a line - there is no reliable way to tell
+    // a path from a sentence - but it cannot fabricate a collision, because the canonical gate
+    // compares whole lines and a sentence never equals a path. That is the property the bash
+    // variant lacks (it tokenizes on spaces, so "the" equals "the").
+    assert.equal(
+      checkScopeCollision(scope, [annotatedRoute], 'bravo').hasCollision,
+      false,
+      'an unrelated issue with a prose-annotated Files section must stay claimable',
+    )
+  })
+})
