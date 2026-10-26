@@ -48,7 +48,21 @@ const resolveThresholdPercent = (
 }
 
 export default function (pi: ExtensionAPI) {
-  // 1. Hook into Pi's compaction engine: generate summary with reasoning disabled to prevent hitting token caps
+  // 1. Session start: announce active context window and compaction threshold
+  pi.on('session_start', async (_event, ctx) => {
+    const usage = ctx.getContextUsage()
+    const modelId = ctx.model?.id || ''
+    const thresholdPercent = resolveThresholdPercent(modelId, 60)
+    const window = usage?.contextWindow || ctx.model?.contextWindow || 0
+    const msg = `[auto-compact] Context monitor active: model=${ctx.model?.provider || 'default'}/${modelId}, window=${window} tokens, threshold=${thresholdPercent}%`
+    if (ctx.hasUI) {
+      ctx.ui.notify(msg, 'info')
+    } else {
+      console.log(msg)
+    }
+  })
+
+  // 2. Hook into Pi's compaction engine: generate summary with reasoning disabled to prevent hitting token caps
   pi.on('session_before_compact', async (event, ctx) => {
     const { preparation, signal } = event
     const {
@@ -63,8 +77,12 @@ export default function (pi: ExtensionAPI) {
       return
     }
 
-    const msg =
-      '[auto-compact] Compacting context and preserving state (fast summarization)...'
+    const reason = (event as any).reason || 'threshold'
+    const isMidTurn =
+      Boolean(preparation?.isSplitTurn) ||
+      reason === 'threshold' ||
+      reason === 'overflow'
+    const msg = `[auto-compact] Compacting context ${isMidTurn ? 'mid-turn ' : ''}(reason: ${reason}) and preserving state...`
     if (ctx.hasUI) {
       ctx.ui.notify(msg, 'info')
     } else {

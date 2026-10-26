@@ -1,5 +1,6 @@
 const { spawn } = require('node:child_process')
 const path = require('node:path')
+const { syncCompactionSettings } = require('../config/compaction')
 
 const runPiSession = async ({
   targetPath,
@@ -19,6 +20,11 @@ const runPiSession = async ({
   if (model) args.push('--model', model)
   if (thinking) args.push('--thinking', thinking)
   if (extensionPath) args.push('--extension', extensionPath)
+
+  syncCompactionSettings({
+    model: model || 'qw/qwen3.8-max',
+    percent: env.COMPACT_PERCENT || 60,
+  })
 
   const basePrompt =
     prompt || 'Proceed with development using the coordinate skill.'
