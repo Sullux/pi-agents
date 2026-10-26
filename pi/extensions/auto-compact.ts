@@ -1,4 +1,4 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 
 export default function (pi: ExtensionAPI) {
   // 1. Hook into Pi's compaction engine to inject domain-specific instructions
@@ -24,9 +24,16 @@ export default function (pi: ExtensionAPI) {
     const percent = usage?.percent ?? 0
     const tokens = usage?.tokens ?? 0
 
-    // Threshold: strictly keep context <= 16% (~160,000 tokens on 1M models)
-    if (percent > 16 || tokens > 160000) {
-      const msg = `[auto-compact] Context at ${percent.toFixed(1)}% (${tokens} tokens) exceeds 16% threshold. Forcing compaction...`
+    const thresholdPercent = Number(
+      process.env.PI_COMPACT_PERCENT || process.env.COMPACT_PERCENT || 16,
+    )
+    const thresholdTokens = Number(
+      process.env.PI_COMPACT_TOKENS || process.env.COMPACT_TOKENS || 160000,
+    )
+
+    // Threshold: defaults to <= 16% (~160,000 tokens on 1M models) unless overridden
+    if (percent > thresholdPercent || tokens > thresholdTokens) {
+      const msg = `[auto-compact] Context at ${percent.toFixed(1)}% (${tokens} tokens) exceeds ${thresholdPercent}% / ${thresholdTokens} tokens threshold. Forcing compaction...`
       if (ctx.hasUI) {
         ctx.ui.notify(msg, 'warning')
       } else {
@@ -37,7 +44,7 @@ export default function (pi: ExtensionAPI) {
         ctx.compact({
           onComplete: () => {
             const after = ctx.getContextUsage()
-            const postMsg = `[auto-compact] Compaction completed successfully. Context reduced to ${after?.percent?.toFixed(1) ?? '?' }%.`
+            const postMsg = `[auto-compact] Compaction completed successfully. Context reduced to ${after?.percent?.toFixed(1) ?? '?'}%.`
             if (ctx.hasUI) {
               ctx.ui.notify(postMsg, 'info')
             } else {
@@ -61,7 +68,10 @@ export default function (pi: ExtensionAPI) {
     // If running under autonomous orchestration, cleanly shutdown after compaction is verified
     if (process.env.PI_AUTO_EXIT === '1') {
       if (ctx.hasUI) {
-        ctx.ui.notify('[orchestrator] Turn settled and context verified. Closing TUI for next cycle...', 'info')
+        ctx.ui.notify(
+          '[orchestrator] Turn settled and context verified. Closing TUI for next cycle...',
+          'info',
+        )
       }
       ctx.shutdown()
     }
@@ -73,7 +83,10 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       const usage = ctx.getContextUsage()
       const percent = usage?.percent ?? 0
-      ctx.ui.notify(`Current context: ${percent.toFixed(1)}% (${usage?.tokens ?? 0} tokens)`, 'info')
+      ctx.ui.notify(
+        `Current context: ${percent.toFixed(1)}% (${usage?.tokens ?? 0} tokens)`,
+        'info',
+      )
     },
   })
 }

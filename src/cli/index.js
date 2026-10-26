@@ -326,6 +326,19 @@ const Cli = ({
       }
 
       const env = loader.resolveInstanceEnv(agent, project)
+      if (ag.compactPercent && !env.COMPACT_PERCENT) {
+        env.COMPACT_PERCENT = String(ag.compactPercent)
+      }
+      if (ag.compactTokens && !env.COMPACT_TOKENS) {
+        env.COMPACT_TOKENS = String(ag.compactTokens)
+      }
+      if (flags['compact-percent']) {
+        env.COMPACT_PERCENT = String(flags['compact-percent'])
+      }
+      if (flags['compact-tokens']) {
+        env.COMPACT_TOKENS = String(flags['compact-tokens'])
+      }
+
       const targetPath = workspace.getWorkspacePath(agent, project)
       const github = GitHubClient({ cwd: targetPath })
 
