@@ -593,6 +593,60 @@ describe('Coordination Engine: comment-timeline completeness', () => {
     )
   })
 
+  it('renders a >100-comment issue OWNERLESS when the full timeline ends in a RELEASE', async () => {
+    // The mirror of the pin above: the truncated view ends CLAIMED by bravo, while the
+    // real timeline has one more comment in which bravo let go. Rendering bravo here is
+    // what makes an agent skip a free issue - or worse, post a duplicate claim.
+    const listedComments = [...filler(CEILING - 1), claimOf('bravo')]
+    const listed = {
+      number: 800,
+      title: 'a task',
+      // ws and p are populated on purpose: with the default '-' in every column an
+      // owner-cell assertion would pass on the wrong index and measure nothing.
+      labels: [
+        { name: 'status:claimed' },
+        { name: 'ws:vendor' },
+        { name: 'p1' },
+      ],
+      body: '## Files\nsrc/a.js',
+      comments: listedComments,
+    }
+    const full = {
+      ...listed,
+      comments: [...listedComments, releaseOf('bravo')],
+    }
+    const github = FakeGithub({ issues: [listed], viewed: { 800: full } })
+
+    assert.equal(
+      ownerOf(full),
+      '',
+      'sanity: the full timeline really is ownerless',
+    )
+
+    const out = await coordOver(github).board()
+    const row = out.split('\n').find((l) => l.startsWith('#800'))
+    const cells = row.split(/\s{2,}/)
+
+    assert.equal(cells[0], '#800')
+    assert.equal(cells[1], 'claimed')
+    assert.equal(
+      cells[2],
+      'vendor',
+      'column indexing is what the next assert depends on',
+    )
+    assert.equal(cells[3], 'p1')
+    assert.equal(cells[4], '-', `OWNER column must be empty, got row: ${row}`)
+    assert.ok(
+      !row.includes('bravo'),
+      'a released claimant must not render as owner',
+    )
+    assert.deepEqual(
+      github.calls.viewIssue,
+      [800],
+      'the seam was traveled for this issue',
+    )
+  })
+
   it('refuses a claim whose colliding issue only LOOKS free in the truncated view', async () => {
     const body = '## Files\nsrc/a.js'
     const target = {
