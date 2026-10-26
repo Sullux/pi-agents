@@ -1,4 +1,9 @@
+import { uuidv7 } from '@earendil-works/pi-ai'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
+import {
+  convertToLlm,
+  serializeConversation,
+} from '@earendil-works/pi-coding-agent'
 
 const resolveThresholdPercent = (
   modelId: string = '',
@@ -43,21 +48,118 @@ const resolveThresholdPercent = (
 }
 
 export default function (pi: ExtensionAPI) {
-  // 1. Hook into Pi's compaction engine to inject domain-specific instructions
+  // 1. Hook into Pi's compaction engine: generate summary with reasoning disabled to prevent hitting token caps
   pi.on('session_before_compact', async (event, ctx) => {
-    const msg = '[auto-compact] Compacting context and preserving state...'
+    const { preparation, signal } = event
+    const {
+      messagesToSummarize = [],
+      turnPrefixMessages = [],
+      tokensBefore = 0,
+      firstKeptEntryId,
+      previousSummary,
+    } = preparation || {}
+
+    if (!ctx.model || !firstKeptEntryId) {
+      return
+    }
+
+    const msg =
+      '[auto-compact] Compacting context and preserving state (fast summarization)...'
     if (ctx.hasUI) {
       ctx.ui.notify(msg, 'info')
     } else {
       console.log(msg)
     }
 
-    event.customInstructions = [
-      'Focus on preserving:',
-      '1. Active GitHub coordinate claim status, claimed issue numbers, workstream labels, and branch names.',
-      '2. Key domain decisions, entity schema updates, and completed/pending implementation tasks.',
-      '3. Any active PR numbers, unresolved reviewer comments, or blockers.',
-    ].join('\n')
+    try {
+      const allMessages = [...messagesToSummarize, ...turnPrefixMessages]
+      const conversationText = serializeConversation(convertToLlm(allMessages))
+      const previousContext = previousSummary
+        ? `\n\nPrevious session summary for context:\n${previousSummary}`
+        : ''
+
+      const prompt = `You are a concise conversation summarizer. Create a structured context checkpoint summary of this conversation.
+
+PRESERVE:
+1. Active GitHub coordinate claim status, claimed issue numbers, workstream labels, and branch names.
+2. Key domain decisions, entity schema updates, and completed/pending implementation tasks.
+3. Any active PR numbers, unresolved reviewer comments, or blockers.
+4. Exact file paths, function names, and error messages.
+
+Use this format:
+## Goal
+[What is the user trying to accomplish?]
+
+## Claims & PRs
+- [Active claim, issue #, branch name, PR #]
+
+## Progress
+### Done
+- [x] [Completed tasks]
+### In Progress
+- [ ] [Current work]
+### Blocked
+- [Blockers, if any]
+
+## Key Decisions
+- **[Decision]**: [Brief rationale]
+
+## Next Steps
+1. [Next actions]
+
+${previousContext}
+
+<conversation>
+${conversationText}
+</conversation>`
+
+      // Turn off reasoning for summarization to avoid burning completion tokens on thinking
+      const summarizerModel = { ...ctx.model, reasoning: false }
+
+      const response = await ctx.modelRegistry.complete(
+        summarizerModel,
+        {
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'text', text: prompt }],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        {
+          maxTokens: 8192,
+          signal,
+          cacheRetention: 'none',
+          sessionId: uuidv7(),
+        },
+      )
+
+      const summary = response.content
+        .filter((c: any) => c.type === 'text')
+        .map((c: any) => c.text)
+        .join('\n')
+
+      if (!summary.trim()) {
+        return
+      }
+
+      return {
+        compaction: {
+          summary,
+          firstKeptEntryId,
+          tokensBefore,
+          usage: response.usage,
+        },
+      }
+    } catch (err: any) {
+      const errMsg = `[auto-compact] Custom summarization failed: ${err?.message || err}. Falling back to default.`
+      if (ctx.hasUI) {
+        ctx.ui.notify(errMsg, 'warning')
+      } else {
+        console.warn(errMsg)
+      }
+    }
   })
 
   // 2. Intercept settlement: check context usage, force and await compaction before exiting
