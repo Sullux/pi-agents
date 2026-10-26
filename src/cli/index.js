@@ -326,6 +326,14 @@ const Cli = ({
       }
 
       const env = loader.resolveInstanceEnv(agent, project)
+      if (sys.compaction?.defaultPercent && !env.COMPACT_PERCENT) {
+        env.COMPACT_PERCENT = String(sys.compaction.defaultPercent)
+      }
+      if (sys.compaction?.modelOverrides && !env.COMPACT_MODEL_OVERRIDES) {
+        env.COMPACT_MODEL_OVERRIDES = JSON.stringify(
+          sys.compaction.modelOverrides,
+        )
+      }
       if (ag.compactPercent && !env.COMPACT_PERCENT) {
         env.COMPACT_PERCENT = String(ag.compactPercent)
       }
