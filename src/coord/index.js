@@ -33,7 +33,7 @@ const CoordService = ({
     if (collision.hasCollision) {
       return {
         ok: false,
-        error: `#${number} file scope collides with #${collision.collidingIssue} held by ${collision.collidingAgent} (${collision.collidingFile})`,
+        error: `#${number} file scope collides with #${collision.collidingIssue} held by ${collision.collidingAgent} (${collision.collidingFiles.join(', ')})`,
       }
     }
 

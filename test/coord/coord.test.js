@@ -374,3 +374,66 @@ describe('Coordination Engine: Scope Parsing (#816)', () => {
     )
   })
 })
+
+// #820/#770: a declared path arrives DECORATED. #820 lists `- \`src/sites/.../post.astro\``
+// (bullet + backticks); #770 joins two paths on ONE line with `;`. Compared verbatim neither
+// equals a bare path, so the gate returned hasCollision:false on a pair that overlaps on TWO
+// files - while #820's own body says "expect the scope gate to require a split: line in #770's
+// BODY before a claim goes through". Measured across every live claim: 1 collision detected
+// today, 4 real ones missed, 0 false positives.
+describe('Coordination Engine: Scope Normalization (#820)', () => {
+  it('strips list bullets and backticks from a declared path', () => {
+    assert.deepEqual(parseScope('## Files\n- `src/a.js`\n* src/b.js\n- src/c.js'), [
+      'src/a.js',
+      'src/b.js',
+      'src/c.js',
+    ])
+  })
+
+  it('splits paths joined on one line with a semicolon', () => {
+    assert.deepEqual(parseScope('## Files\nsrc/a.js;test/e2e/a.spec.js'), [
+      'src/a.js',
+      'test/e2e/a.spec.js',
+    ])
+  })
+
+  it('does not mangle a glob, whose ** must survive the bullet strip', () => {
+    assert.deepEqual(parseScope('## Files\nsrc/server/events/ontology/**\n- `src/x/**`'), [
+      'src/server/events/ontology/**',
+      'src/x/**',
+    ])
+  })
+
+  it('still drops placeholders and comments, which normalization must not resurrect', () => {
+    assert.deepEqual(parseScope('## Files\n_(none listed)_\n# a comment\n- `_(none)_`\n'), [])
+  })
+
+  it('the #820 claim now collides with #770 on the two files they really share', () => {
+    const inFlight = {
+      number: 770,
+      body: '## Files\nsrc/sites/resident/src/pages/post.astro;test/e2e/resident.spec.js',
+      comments: [{ body: '**CLAIM** | agent: agent-delta' }],
+    }
+    const decorated = [
+      '- `src/sites/resident/src/pages/post.astro`',
+      '- `src/sites/resident/src/pages/passage.astro`',
+      '- `src/sites/vendor/src/pages/calendar.astro`',
+      '- `public/styles/global.css`',
+      '- `test/e2e/resident.spec.js`',
+    ]
+    const scope = parseScope(['## Files', ...decorated].join('\n'))
+
+    const clash = checkScopeCollision(scope, [inFlight], 'bravo')
+    assert.equal(clash.hasCollision, true, 'a real two-file overlap must not pass the gate')
+    assert.equal(clash.collidingIssue, 770)
+    assert.deepEqual(
+      clash.collidingFiles.slice().sort(),
+      ['src/sites/resident/src/pages/post.astro', 'test/e2e/resident.spec.js'].sort(),
+      'both shared files are named, so the agent can judge whether a split is viable',
+    )
+    assert.ok(
+      clash.collidingFiles.includes(clash.collidingFile),
+      'the legacy single-file field stays the first of the set',
+    )
+  })
+})
