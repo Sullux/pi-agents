@@ -293,13 +293,39 @@ const Cli = ({
         return 1
       }
 
+      const projConfig = loader.project.load(project)
+      if (!projConfig) {
+        stderr(
+          `Error: Project '${project}' is not registered. Run 'page projects add <repo> --alias ${project}' first.`,
+        )
+        return 1
+      }
+
       const sys = loader.getSystemConfig()
-      const ag = loader.agent.load(agent) || {}
-      const env = loader.resolveInstanceEnv(agent, project)
+      let ag = loader.agent.load(agent)
+      if (!ag) {
+        stdout(`[page] Agent '${agent}' not found in profile. Registering...`)
+        loader.agent.save(agent, {
+          model: flags.model || sys.defaultModel,
+          thinking: flags.thinking || sys.defaultThinking,
+          env: {},
+        })
+        ag = loader.agent.load(agent) || {}
+      }
+
       const workspace = WorkspaceManager({
         fs: require('node:fs'),
         agentsRoot: loader.agentsRoot,
       })
+
+      if (!workspace.exists(agent, project)) {
+        const target = workspace.getWorkspacePath(agent, project)
+        stdout(`[page] Project workspace not found at ${target}.`)
+        stdout(`[page] Cloning ${projConfig.repo}...`)
+        workspace.clone(agent, project, projConfig.repo)
+      }
+
+      const env = loader.resolveInstanceEnv(agent, project)
       const targetPath = workspace.getWorkspacePath(agent, project)
       const github = GitHubClient({ cwd: targetPath })
 
