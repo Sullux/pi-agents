@@ -10,6 +10,8 @@ describe('Coordination Engine: Owner Resolution', () => {
     assert.equal(cleanAgent('@alpha'), 'alpha')
     assert.equal(cleanAgent('agent-delta '), 'delta')
     assert.equal(cleanAgent('foxtrot'), 'foxtrot')
+    assert.equal(cleanAgent('Delta'), 'delta')
+    assert.equal(cleanAgent('agent-Delta'), 'delta')
   })
 
   it('ownerOf determines ownership from protocol comments', () => {
@@ -51,7 +53,8 @@ describe('Coordination Engine: Owner Resolution', () => {
     }
     assert.equal(isMine(issue, 'agent-echo'), true)
     assert.equal(isMine(issue, 'echo'), true)
-    assert.equal(isMine(issue, 'pi/echo'), true)
+    assert.equal(isMine(issue, 'Echo'), true)
+    assert.equal(isMine(issue, 'pi/Echo'), true)
     assert.equal(isMine(issue, 'delta'), false)
   })
 })

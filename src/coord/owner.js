@@ -1,6 +1,7 @@
 const cleanAgent = (name = '') =>
   name
     .trim()
+    .toLowerCase()
     .replace(/^@/, '')
     .replace(/^pi\//, '')
     .replace(/^agent-/, '')
@@ -33,7 +34,7 @@ const ownerOf = (issue) => {
 
 const isMine = (issue, agent) => {
   const cleanCurrent = cleanAgent(agent)
-  const owner = ownerOf(issue)
+  const owner = cleanAgent(ownerOf(issue))
   return Boolean(cleanCurrent && owner === cleanCurrent)
 }
 
