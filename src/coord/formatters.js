@@ -2,7 +2,7 @@ const { ownerOf, cleanAgent } = require('./owner')
 const { parseScope } = require('./scope')
 
 const pad = (str = '', len = 0) =>
-  str.length >= len ? str.slice(0, len) : str + ' '.repeat(len - str.length)
+  str.length >= len ? str : str + ' '.repeat(len - str.length)
 
 const formatBoard = (issues = [], currentAgent = '') => {
   const cleanCurrent = cleanAgent(currentAgent)
@@ -12,7 +12,7 @@ const formatBoard = (issues = [], currentAgent = '') => {
 
   const lines = [
     '== board ==',
-    'ISSUE  STATUS       WS              P   OWNER         TITLE                                        FILES',
+    'ISSUE  STATUS       WS              P   OWNER                       TITLE                                        FILES',
   ]
 
   for (const issue of nonHubIssues) {
@@ -38,7 +38,7 @@ const formatBoard = (issues = [], currentAgent = '') => {
         `${pad(statusLabel, 12)} ` +
         `${pad(wsLabel, 15)} ` +
         `${pad(pLabel, 3)} ` +
-        `${pad(ownerDisplay, 13)} ` +
+        `${pad(ownerDisplay, 27)} ` +
         `${pad(issue.title, 44)} ` +
         `${files}`,
     )

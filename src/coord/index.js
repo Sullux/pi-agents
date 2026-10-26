@@ -78,16 +78,40 @@ const CoordService = ({
     return { ok: true, number }
   }
 
+  const review = async (number, { pr = '', text = '' } = {}) => {
+    const commentBody =
+      `**REVIEW** | agent: agent-${cleanCurrent} | at: ${now()}` +
+      (pr ? ` | pr: #${pr}` : '') +
+      (text ? `\n\n${text}` : '')
+    await github.commentIssue(number, commentBody)
+    const issue = await github.viewIssue(number)
+    const existingStatusLabels = (issue?.labels || [])
+      .map((l) => (typeof l === 'string' ? l : l.name))
+      .filter(
+        (name) => name.startsWith('status:') && name !== 'status:in-review',
+      )
+    await github.editIssue(number, {
+      addLabels: ['status:in-review'],
+      removeLabels: existingStatusLabels,
+    })
+    return { ok: true, number }
+  }
+
   const done = async (number, { pr = '', text = '' } = {}) => {
     const commentBody =
       `**DONE** | agent: agent-${cleanCurrent} | at: ${now()}` +
       (pr ? ` | pr: #${pr}` : '') +
       (text ? `\n\n${text}` : '')
     await github.commentIssue(number, commentBody)
-    await github.editIssue(number, {
-      addLabels: ['status:done'],
-      removeLabels: ['status:claimed', 'status:in-progress'],
-    })
+    const issue = await github.viewIssue(number)
+    const existingStatusLabels = (issue?.labels || [])
+      .map((l) => (typeof l === 'string' ? l : l.name))
+      .filter((name) => name.startsWith('status:'))
+    if (existingStatusLabels.length) {
+      await github.editIssue(number, {
+        removeLabels: existingStatusLabels,
+      })
+    }
     if (github.closeIssue) {
       await github.closeIssue(number)
     }
@@ -121,6 +145,7 @@ const CoordService = ({
     claim,
     release,
     status,
+    review,
     done,
     hub,
     board,

@@ -442,6 +442,13 @@ const Cli = ({
         stdout(`Status updated on #${issueNum}`)
         return 0
       }
+      if (sub === 'review') {
+        const issueNum = Number(positionals[1])
+        const msg = positionals.slice(2).join(' ')
+        await coord.review(issueNum, { pr: flags.pr, text: msg })
+        stdout(`Moved #${issueNum} to in-review`)
+        return 0
+      }
       if (sub === 'done') {
         const issueNum = Number(positionals[1])
         await coord.done(issueNum, { pr: flags.pr })
