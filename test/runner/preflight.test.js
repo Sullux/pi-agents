@@ -21,6 +21,47 @@ describe('Runner: Backlog Preflight', () => {
     assert.equal(res.reason, 'owned_claims')
   })
 
+  it('does not count status:in-review issues as active owned_claims', async () => {
+    const issues = [
+      {
+        number: 10,
+        labels: [{ name: 'status:claimed' }, { name: 'status:in-review' }],
+        comments: [{ body: '**CLAIM** | agent: agent-alpha' }],
+      },
+    ]
+    const github = {
+      listIssues: async () => issues,
+      listPrs: async () => [],
+    }
+
+    const res = await checkBacklogAvailability({ github, agent: 'alpha' })
+    assert.equal(res.status, 'idle_busy')
+    assert.equal(res.waitSeconds, 60)
+  })
+
+  it('returns unclaimed_tasks when owned claims are in-review but unclaimed tasks exist', async () => {
+    const issues = [
+      {
+        number: 10,
+        labels: [{ name: 'status:claimed' }, { name: 'status:in-review' }],
+        comments: [{ body: '**CLAIM** | agent: agent-alpha' }],
+      },
+      {
+        number: 11,
+        labels: [{ name: 'status:unclaimed' }, { name: 'type:task' }],
+        comments: [],
+      },
+    ]
+    const github = {
+      listIssues: async () => issues,
+      listPrs: async () => [],
+    }
+
+    const res = await checkBacklogAvailability({ github, agent: 'alpha' })
+    assert.equal(res.status, 'ready')
+    assert.equal(res.reason, 'unclaimed_tasks')
+  })
+
   it('returns ready if actionable unclaimed issues exist', async () => {
     const issues = [
       {

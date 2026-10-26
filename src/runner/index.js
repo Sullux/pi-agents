@@ -3,6 +3,21 @@ const { waitInterruptible } = require('./countdown')
 const { runPiSession } = require('./session')
 const { SessionTracker } = require('./sessionTracker')
 
+const resolveCyclePrompt = (availability, steering) => {
+  const prompts = {
+    unclaimed_tasks:
+      'Actionable unclaimed tasks are available on the coordination board. Check `page coord board`, claim a task, and begin development using the coordinate skill.',
+    open_prs:
+      'Open pull requests are awaiting peer review. Review open peer PRs, verify test suites, and post review verdicts using the coordinate skill.',
+    owned_claims:
+      'Continue active development on your claimed task using the coordinate skill.',
+  }
+  const base =
+    prompts[availability?.reason] ||
+    'Proceed with development using the coordinate skill.'
+  return steering ? `${base} Explicit steering from user: ${steering}` : base
+}
+
 const Runner = ({
   github,
   agent,
@@ -22,6 +37,7 @@ const Runner = ({
     }
 
     let cycle = 1
+    let previousReason = null
 
     try {
       while (cycle <= maxCycles) {
@@ -53,10 +69,16 @@ const Runner = ({
         }
 
         // 2. Work available -> Run Pi session
+        const isNewTask =
+          previousReason === 'owned_claims' &&
+          availability.reason === 'unclaimed_tasks'
+        previousReason = availability.reason
+
         if (sessionTracker) sessionTracker.updateStatus(agent, 'running')
         await sessionImpl({
           targetPath,
-          steering,
+          prompt: resolveCyclePrompt(availability, steering),
+          continueSession: !isNewTask,
           model,
           thinking,
           env,

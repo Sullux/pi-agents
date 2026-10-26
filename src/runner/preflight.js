@@ -28,12 +28,15 @@ const checkBacklogAvailability = async ({ github, agent = '' }) => {
     }
   }
 
-  const myClaims = nonHubIssues.filter((i) => isMine(i, agent))
-  if (myClaims.length > 0) {
+  const myActiveClaims = nonHubIssues.filter(
+    (i) =>
+      isMine(i, agent) && !i.labels?.some((l) => l.name === 'status:in-review'),
+  )
+  if (myActiveClaims.length > 0) {
     return {
       status: 'ready',
       reason: 'owned_claims',
-      count: myClaims.length,
+      count: myActiveClaims.length,
     }
   }
 

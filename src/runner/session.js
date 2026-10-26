@@ -8,6 +8,7 @@ const runPiSession = async ({
   steering = '',
   model,
   thinking,
+  continueSession = true,
   env = {},
   spawnImpl = spawn,
 } = {}) => {
@@ -15,7 +16,8 @@ const runPiSession = async ({
     __dirname,
     '../../pi/extensions/auto-compact.ts',
   )
-  const args = ['--continue', '--approve']
+  const args = ['--approve']
+  if (continueSession) args.unshift('--continue')
 
   if (model) args.push('--model', model)
   if (thinking) args.push('--thinking', thinking)
