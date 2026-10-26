@@ -44,6 +44,13 @@ const formatBoard = (issues = [], currentAgent = '') => {
     )
   }
 
+  const truncated = nonHubIssues.filter((i) => i.commentsTruncated)
+  if (truncated.length) {
+    lines.push(
+      `!! ${truncated.map((i) => `#${i.number}`).join(', ')}: gh returned only the first 100 comments, so the OWNER above may be stale`,
+    )
+  }
+
   return lines.join('\n')
 }
 
@@ -110,10 +117,15 @@ const formatSync = ({
   )
   const hubComments = (hubIssue?.comments || []).slice(-5)
   const hubLines = [
-    `\n== hub #${hubIssue?.number || hubNumber}, last 5 SYNC ==`,
+    `\n== hub #${hubIssue?.number || hubNumber}, last 5 comments ==`,
     hubComments.length
       ? hubComments.map((c) => `  ${c.body}`).join('\n\n')
       : '  (none)',
+    ...(hubIssue?.commentsTruncated
+      ? [
+          "  !! gh returned only the first 100 comments, so the tail above is the FIRST page's, not the latest - read the hub with `gh issue view` before trusting it",
+        ]
+      : []),
   ]
 
   return [

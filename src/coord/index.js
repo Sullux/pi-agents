@@ -3,6 +3,13 @@ const { parseScope, checkScopeCollision } = require('./scope')
 const { evaluateClaimRace } = require('./race')
 const { formatBoard, formatSync } = require('./formatters')
 
+// `gh issue list --json comments` returns only the FIRST 100 comments of an issue
+// (measured on hub #4: 100 returned, 645 real), so every timeline-dependent read
+// built on it - ownerOf's last-protocol-comment-wins, or the hub tail's slice(-5) -
+// silently freezes at the hundredth comment forever. `gh issue view` returns them
+// all, so re-fetch only the issues that reached the ceiling.
+const COMMENT_PAGE_CEILING = 100
+
 const CoordService = ({
   github,
   agent = process.env.COORD_AGENT || '',
@@ -10,6 +17,24 @@ const CoordService = ({
   now = Date.now,
 } = {}) => {
   const cleanCurrent = cleanAgent(agent)
+
+  const withFullTimelines = async (issues = []) => {
+    const suspect = issues.filter(
+      (i) => (i.comments || []).length >= COMMENT_PAGE_CEILING,
+    )
+    if (!suspect.length) return issues
+    const refreshed = await Promise.all(
+      suspect.map((i) => github.viewIssue(i.number)),
+    )
+    const byNumber = new Map(
+      refreshed.filter(Boolean).map((r) => [r.number, r]),
+    )
+    // A failed re-fetch must stay VISIBLE: falling back to the truncated array
+    // silently is how the stale tail shipped in the first place.
+    return issues.map(
+      (i) => byNumber.get(i.number) || { ...i, commentsTruncated: true },
+    )
+  }
 
   const claim = async (number, { plan = '', eta = '' } = {}) => {
     const issue = await github.viewIssue(number)
@@ -28,7 +53,7 @@ const CoordService = ({
       return { ok: false, error: `#${number} declares no Files scope` }
     }
 
-    const allIssues = await github.listIssues()
+    const allIssues = await withFullTimelines(await github.listIssues())
     const collision = checkScopeCollision(files, allIssues, cleanCurrent)
     if (collision.hasCollision) {
       return {
@@ -127,12 +152,12 @@ const CoordService = ({
   }
 
   const board = async () => {
-    const issues = await github.listIssues()
+    const issues = await withFullTimelines(await github.listIssues())
     return formatBoard(issues, cleanCurrent, github.repo)
   }
 
   const sync = async () => {
-    const issues = await github.listIssues()
+    const issues = await withFullTimelines(await github.listIssues())
     return formatSync({
       issues,
       currentAgent: cleanCurrent,

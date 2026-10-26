@@ -437,3 +437,222 @@ describe('Coordination Engine: Scope Normalization (#820)', () => {
     )
   })
 })
+
+// #826: `gh issue list --json comments` returns only the FIRST 100 comments of an issue
+// (measured on hub #4: 100 returned against 645 real), and every consumer here is
+// timeline-dependent - `slice(-5)` for the hub tail, last-protocol-comment-wins for OWNER.
+// Slicing the end of a truncated array does not degrade gradually: it freezes forever.
+describe('Coordination Engine: comment-timeline completeness', () => {
+  const CEILING = 100
+  const { CoordService } = require('../../src/coord/index')
+
+  const claimOf = (agent) => ({
+    body: `**CLAIM** | agent: agent-${agent} | human: @Sullux | at: 1`,
+  })
+  const releaseOf = (agent) => ({
+    body: `**RELEASE** | agent: agent-${agent} | reason: standing down`,
+  })
+  const filler = (n) => Array.from({ length: n }, (_, i) => ({ body: `c${i}` }))
+
+  const FakeGithub = ({ issues, viewed = {} }) => {
+    const calls = { viewIssue: [], commentIssue: [], editIssue: [] }
+    return {
+      calls,
+      repo: 'test/repo',
+      listIssues: async () => issues,
+      viewIssue: async (number) => {
+        calls.viewIssue.push(number)
+        return viewed[number]
+      },
+      commentIssue: async (number, body) => {
+        calls.commentIssue.push([number, body])
+        return ''
+      },
+      editIssue: async (number, opts) => {
+        calls.editIssue.push([number, opts])
+        return ''
+      },
+      closeIssue: async () => '',
+    }
+  }
+
+  const coordOver = (github) =>
+    CoordService({ github, agent: 'delta', human: 'Sullux', now: () => 1 })
+
+  const hubIssue = (comments) => ({
+    number: 4,
+    title: 'coordination hub',
+    labels: [{ name: 'hub' }],
+    body: '',
+    comments,
+  })
+
+  it("sync's hub tail is the FULL timeline's last five, not the first page's", async () => {
+    const listed = hubIssue(filler(CEILING)) // what gh issue list hands back
+    const markers = ['TAIL-1', 'TAIL-2', 'TAIL-3', 'TAIL-4', 'TAIL-5']
+    const full = hubIssue([
+      ...filler(CEILING),
+      ...markers.map((m) => ({ body: m })),
+    ])
+    const github = FakeGithub({ issues: [listed], viewed: { 4: full } })
+
+    const out = await coordOver(github).sync()
+
+    for (const marker of markers) {
+      assert.ok(
+        out.includes(marker),
+        `the genuinely-latest ${marker} must be printed`,
+      )
+    }
+    // Non-vacuity: the first page's own tail must be GONE. Without this the pin would pass
+    // on a fixture whose two sources agree, i.e. with the bug still live.
+    for (const stale of ['c95', 'c96', 'c97', 'c98', 'c99']) {
+      assert.ok(
+        !out.includes(stale),
+        `stale first-page comment ${stale} must not be printed`,
+      )
+    }
+    assert.deepEqual(
+      github.calls.viewIssue,
+      [4],
+      'the hub was re-fetched, and only the hub',
+    )
+  })
+
+  it('prints the last five COMMENTS - the header no longer claims a SYNC filter that never existed', async () => {
+    const github = FakeGithub({ issues: [hubIssue(filler(3))] })
+
+    const out = await coordOver(github).sync()
+
+    assert.ok(
+      out.includes('last 5 comments'),
+      out.split('\n').find((l) => l.includes('== hub')),
+    )
+    assert.ok(
+      !out.includes('SYNC'),
+      'hub() posts no **SYNC** marker, so the old header lied',
+    )
+    assert.ok(
+      out.includes('c2') && !out.includes('c95'),
+      'tail still printed below the ceiling',
+    )
+  })
+
+  it('does not re-fetch when nothing reached the ceiling', async () => {
+    const github = FakeGithub({ issues: [hubIssue(filler(CEILING - 1))] })
+
+    const out = await coordOver(github).sync()
+
+    assert.deepEqual(
+      github.calls.viewIssue,
+      [],
+      'no extra gh call for a complete timeline',
+    )
+    assert.ok(out.includes(`c${CEILING - 2}`), 'the listed tail is used as-is')
+  })
+
+  it('resolves the board OWNER from the full timeline, not the truncated one', async () => {
+    // 100 comments whose visible tail is a RELEASE: bravo looks like they let go.
+    const listedComments = [
+      ...filler(CEILING - 2),
+      claimOf('bravo'),
+      releaseOf('bravo'),
+    ]
+    const body = '## Files\nsrc/a.js'
+    const labels = [{ name: 'status:claimed' }]
+    const listed = {
+      number: 800,
+      title: 'a task',
+      labels,
+      body,
+      comments: listedComments,
+    }
+    // The real timeline has one more comment: foxtrot claimed after the release.
+    const full = {
+      ...listed,
+      comments: [...listedComments, claimOf('foxtrot')],
+    }
+    const github = FakeGithub({ issues: [listed], viewed: { 800: full } })
+
+    const out = await coordOver(github).board()
+    const row = out.split('\n').find((l) => l.startsWith('#800'))
+
+    assert.ok(row, 'the row rendered')
+    assert.ok(
+      row.includes('foxtrot'),
+      `owner must come from the full timeline, got: ${row}`,
+    )
+    assert.ok(
+      !row.includes('bravo'),
+      'a claimant who released must not render as owner',
+    )
+    assert.deepEqual(
+      github.calls.viewIssue,
+      [800],
+      'the >100-comment issue was re-fetched',
+    )
+  })
+
+  it('refuses a claim whose colliding issue only LOOKS free in the truncated view', async () => {
+    const body = '## Files\nsrc/a.js'
+    const target = {
+      number: 900,
+      title: 'mine',
+      labels: [],
+      body,
+      comments: [],
+    }
+    const rivalComments = [
+      ...filler(CEILING - 2),
+      claimOf('bravo'),
+      releaseOf('bravo'),
+    ]
+    const listedRival = {
+      number: 800,
+      title: 'theirs',
+      labels: [{ name: 'status:claimed' }],
+      body,
+      comments: rivalComments,
+    }
+    const fullRival = {
+      ...listedRival,
+      comments: [...rivalComments, claimOf('foxtrot')],
+    }
+    const github = FakeGithub({
+      issues: [target, listedRival],
+      viewed: { 900: target, 800: fullRival },
+    })
+
+    const res = await coordOver(github).claim(900)
+
+    assert.equal(
+      res.ok,
+      false,
+      'the gate must see foxtrot, not an ownerless issue',
+    )
+    assert.match(res.error, /collides with #800 held by foxtrot/)
+    assert.ok(
+      github.calls.viewIssue.includes(800),
+      'the rival timeline was re-fetched',
+    )
+    assert.deepEqual(
+      github.calls.commentIssue,
+      [],
+      'no CLAIM comment was posted on a lost gate',
+    )
+  })
+
+  it('says so out loud when a truncated timeline could not be re-fetched', async () => {
+    const github = FakeGithub({
+      issues: [hubIssue(filler(CEILING))],
+      viewed: {},
+    })
+
+    const out = await coordOver(github).sync()
+
+    assert.ok(
+      out.includes('only the first 100 comments'),
+      'a silent fallback to the truncated array is how the stale tail shipped',
+    )
+  })
+})
