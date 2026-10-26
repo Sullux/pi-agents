@@ -709,4 +709,78 @@ describe('Coordination Engine: comment-timeline completeness', () => {
       'a silent fallback to the truncated array is how the stale tail shipped',
     )
   })
+
+  // The two pins above prove the warning FIRES. Neither proves it stays quiet for an
+  // issue that was never truncated, and that negative space is where dae1e65 shipped a
+  // defect: the tagging ran in a map over EVERY issue, so the hub reaching the ceiling
+  // flagged all 23 rows of a live board as "OWNER may be stale". A warning that cries
+  // wolf on every run trains agents to skip the one that matters.
+  it('tags NOBODY on a mixed board when every re-fetch succeeds', async () => {
+    const small = (number, title, n) => ({
+      number,
+      title,
+      labels: [{ name: 'status:claimed' }],
+      body: `## Files\nsrc/${title}.js`,
+      comments: filler(n),
+    })
+    const github = FakeGithub({
+      issues: [
+        hubIssue(filler(CEILING)),
+        small(800, 'a', 3),
+        small(801, 'b', 5),
+      ],
+      viewed: {
+        4: hubIssue([...filler(CEILING), { body: 'TAIL' }]),
+      },
+    })
+
+    const out = await coordOver(github).board()
+
+    assert.ok(
+      !out.includes('!!'),
+      `no warning expected on a healthy board:\n${out}`,
+    )
+    assert.ok(!out.includes('may be stale'), out)
+    assert.deepEqual(
+      github.calls.viewIssue,
+      [4],
+      'only the ceiling issue was re-fetched, and the small ones were left alone',
+    )
+  })
+
+  it('names ONLY the issue whose re-fetch failed, not its healthy neighbours', async () => {
+    const atCeiling = (number, title) => ({
+      number,
+      title,
+      labels: [],
+      body: '',
+      comments: filler(CEILING),
+    })
+    const okIssue = atCeiling(800, 'a')
+    const github = FakeGithub({
+      issues: [
+        okIssue,
+        atCeiling(801, 'b'),
+        { number: 802, title: 'c', labels: [], body: '', comments: filler(2) },
+      ],
+      // 800 re-fetches fine, 801 is missing from `viewed`, 802 was never a suspect
+      viewed: {
+        800: { ...okIssue, comments: [...filler(CEILING), { body: 'TAIL' }] },
+      },
+    })
+
+    const out = await coordOver(github).board()
+    const warn = out.split('\n').find((l) => l.startsWith('!!'))
+
+    assert.ok(warn, 'the failed re-fetch is still reported loudly')
+    assert.ok(warn.includes('#801'), warn)
+    assert.ok(
+      !warn.includes('#800'),
+      `a successful re-fetch must not be named: ${warn}`,
+    )
+    assert.ok(
+      !warn.includes('#802'),
+      `a below-ceiling issue was never truncated: ${warn}`,
+    )
+  })
 })

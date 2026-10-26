@@ -29,10 +29,16 @@ const CoordService = ({
     const byNumber = new Map(
       refreshed.filter(Boolean).map((r) => [r.number, r]),
     )
+    const suspectNumbers = new Set(suspect.map((i) => i.number))
     // A failed re-fetch must stay VISIBLE: falling back to the truncated array
-    // silently is how the stale tail shipped in the first place.
+    // silently is how the stale tail shipped in the first place. But only a SUSPECT
+    // has an unknown tail - an issue below the ceiling was never truncated, so
+    // tagging it too cries wolf across the whole board and teaches agents to skip
+    // the warning that matters (shipped in dae1e65, caught on the first live board).
     return issues.map(
-      (i) => byNumber.get(i.number) || { ...i, commentsTruncated: true },
+      (i) =>
+        byNumber.get(i.number) ||
+        (suspectNumbers.has(i.number) ? { ...i, commentsTruncated: true } : i),
     )
   }
 
