@@ -784,3 +784,167 @@ describe('Coordination Engine: comment-timeline completeness', () => {
     )
   })
 })
+
+// #863: checkScopeCollision iterated EVERY open issue regardless of its status label, so an issue
+// that was merely awaiting review fenced files exactly as hard as one being actively edited - and
+// there was no way to record an agreed split. Measured 2026-10-26: 5 of 5 unclaimed issues
+// unclaimable, 4 of them frozen by in-review work. Re-measured 2026-10-27 before filing: #820,
+// the board's only unclaimed issue, still refused against echo's in-review #786 on
+// public/styles/global.css and test/e2e/resident.spec.js.
+describe('Coordination Engine: status-aware scope collision (#863)', () => {
+  const { parseSplits, statusOf } = require('../../src/coord/scope')
+
+  // pitcairn #820 vs #786, the live shape: same two paths, only the STATUS differs between arms.
+  const overlapping = (status) => ({
+    number: 786,
+    labels: status ? [{ name: `status:${status}` }] : [],
+    body: '## Files\npublic/styles/global.css\ntest/e2e/resident.spec.js',
+    comments: [{ body: '**CLAIM** | agent: agent-echo' }],
+  })
+  const TARGET = [
+    'src/sites/resident/src/pages/post.astro',
+    'public/styles/global.css',
+    'test/e2e/resident.spec.js',
+  ]
+
+  it('an in-review overlap warns instead of refusing', () => {
+    const res = checkScopeCollision(TARGET, [overlapping('in-review')], 'bravo')
+    assert.equal(res.hasCollision, false, 'finished work must not fence new work')
+    assert.equal(res.warnings.length, 1, 'and it must not be silent either')
+    assert.equal(res.warnings[0].issue, 786)
+    assert.equal(res.warnings[0].agent, 'echo')
+    assert.equal(res.warnings[0].status, 'in-review')
+    assert.deepEqual(res.warnings[0].files, [
+      'public/styles/global.css',
+      'test/e2e/resident.spec.js',
+    ])
+  })
+
+  it('the SAME overlap still refuses at every live status - the pair is what proves the classifier', () => {
+    // Non-vacuity floor: without this arm the pin above would also pass on a gate that never
+    // refuses anything, which is the false-green class.
+    for (const status of ['claimed', 'in-progress', 'blocked']) {
+      const res = checkScopeCollision(TARGET, [overlapping(status)], 'bravo')
+      assert.equal(res.hasCollision, true, `status:${status} must still fence`)
+      assert.equal(res.collidingIssue, 786)
+      assert.equal(res.collidingStatus, status, 'the refusal can name what is blocking')
+      assert.deepEqual(res.warnings, [], 'a hard fence is not also a warning')
+    }
+  })
+
+  it('an owned issue with NO status label still fences, so the pre-#863 fixtures keep their meaning', () => {
+    const res = checkScopeCollision(TARGET, [overlapping('')], 'bravo')
+    assert.equal(res.hasCollision, true)
+    assert.equal(res.collidingStatus, 'unclaimed')
+  })
+
+  it('the owner skip is unchanged: your own in-flight issue never fences you', () => {
+    const mine = { ...overlapping('in-progress'), comments: [{ body: '**CLAIM** | agent: agent-bravo' }] }
+    assert.equal(checkScopeCollision(TARGET, [mine], 'bravo').hasCollision, false)
+  })
+
+  it('a split: line in EITHER body waives exactly that pair', () => {
+    const peer = overlapping('in-progress')
+    const hereBody = '## Files\npublic/styles/global.css\nsplit: #786'
+    const thereBody = `${peer.body}\nsplit: #820`
+
+    // declared on the claiming issue
+    assert.equal(
+      checkScopeCollision(TARGET, [peer], 'bravo', { number: 820, body: hereBody }).hasCollision,
+      false,
+      'a split recorded here frees the claim',
+    )
+    // declared on the overlapping issue, which is where the bash variant told agents to put it
+    assert.equal(
+      checkScopeCollision(TARGET, [{ ...peer, body: thereBody }], 'bravo', {
+        number: 820,
+        body: '## Files\npublic/styles/global.css',
+      }).hasCollision,
+      false,
+      'a split recorded there frees the claim too',
+    )
+  })
+
+  it('a waiver does not leak to a THIRD overlapping issue', () => {
+    const waived = overlapping('in-progress')
+    const other = {
+      number: 770,
+      labels: [{ name: 'status:in-progress' }],
+      body: '## Files\npublic/styles/global.css',
+      comments: [{ body: '**CLAIM** | agent: agent-delta' }],
+    }
+    const res = checkScopeCollision(TARGET, [waived, other], 'bravo', {
+      number: 820,
+      body: '## Files\npublic/styles/global.css\nsplit: #786',
+    })
+    assert.equal(res.hasCollision, true, 'the unwaived overlap must still refuse')
+    assert.equal(res.collidingIssue, 770)
+  })
+
+  it('a split: line is an agreement, never a path (#831 carries a live one)', () => {
+    const body = '## Files\ntest/e2e/system.spec.js\npublic/js/system/landing.js\nsplit: #813,#830'
+    assert.deepEqual(parseScope(body), [
+      'test/e2e/system.spec.js',
+      'public/js/system/landing.js',
+    ])
+    assert.deepEqual([...parseSplits(body)].sort(), [813, 830])
+    // and the dropped entry cannot fabricate a collision against an issue declaring that path
+    assert.equal(
+      checkScopeCollision(parseScope(body), [
+        {
+          number: 813,
+          labels: [{ name: 'status:in-progress' }],
+          body: '## Files\nsplit: #813,#830',
+          comments: [{ body: '**CLAIM** | agent: agent-echo' }],
+        },
+      ], 'bravo').hasCollision,
+      false,
+    )
+  })
+
+  it('a FENCED split: example grants no waiver, so documenting the syntax is safe', () => {
+    const body = ['## Goal', '```md', 'split: #786', '```', '## Files', 'public/styles/global.css'].join('\n')
+    assert.equal(parseSplits(body).size, 0)
+    assert.equal(
+      checkScopeCollision(TARGET, [overlapping('in-progress')], 'bravo', { number: 820, body }).hasCollision,
+      true,
+    )
+  })
+
+  it('statusOf reads a label object or a bare string, and defaults to unclaimed', () => {
+    assert.equal(statusOf({ labels: [{ name: 'status:in-review' }, { name: 'p2' }] }), 'in-review')
+    assert.equal(statusOf({ labels: ['status:blocked'] }), 'blocked')
+    assert.equal(statusOf({ labels: [{ name: 'p2' }] }), 'unclaimed')
+    assert.equal(statusOf({}), 'unclaimed')
+  })
+
+  it('the board renders a 0-entry scope loudly, not as the same dash an absent label gets', async () => {
+    // pitcairn #769: heading was an H3, so /^## Files/ never matched. It rendered as free on the
+    // board while claim refused it - the two surfaces disagreed about the same fact.
+    const { CoordService } = require('../../src/coord/index')
+    const h3 = {
+      number: 769,
+      title: 'seed data',
+      labels: [{ name: 'status:unclaimed' }, { name: 'ws:main' }, { name: 'p2' }],
+      body: '### Files\nsrc/server/db/seeds/data/accommodations.json',
+      comments: [],
+    }
+    const declared = {
+      number: 770,
+      title: 'notice form',
+      labels: [{ name: 'status:claimed' }, { name: 'ws:resident' }, { name: 'p2' }],
+      body: '## Files\nsrc/sites/resident/src/pages/post.astro',
+      comments: [{ body: '**CLAIM** | agent: agent-delta' }],
+    }
+    const github = { listIssues: async () => [h3, declared], viewIssue: async (n) => (n === 769 ? h3 : declared) }
+    const out = await CoordService({ github, agent: 'bravo' }).board()
+
+    const unparseable = out.split('\n').find((l) => l.startsWith('#769'))
+    const parseable = out.split('\n').find((l) => l.startsWith('#770'))
+    assert.ok(unparseable.includes('!!NO-SCOPE'), `row must flag the unparseable scope: ${unparseable}`)
+    assert.ok(
+      parseable.includes('src/sites/resident/src/pages/post.astro'),
+      `a real scope still renders as paths: ${parseable}`,
+    )
+  })
+})

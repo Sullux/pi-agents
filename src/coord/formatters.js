@@ -4,6 +4,13 @@ const { parseScope } = require('./scope')
 const pad = (str = '', len = 0) =>
   str.length >= len ? str : str + ' '.repeat(len - str.length)
 
+// #863: a 0-entry scope used to render as `-`, the same cell an absent ws/p label gets, so an
+// issue whose Files heading was an H3 (pitcairn #769) looked FREE on the board while `claim`
+// refused it with "declares no Files scope". Two surfaces disagreed about the same fact. Keep the
+// parse strict and make the board loud instead, so the unclaimable issue is visible before an
+// agent spends a claim attempt discovering it.
+const scopeCell = (body) => parseScope(body).join(' ') || '!!NO-SCOPE'
+
 const formatBoard = (issues = [], currentAgent = '') => {
   const cleanCurrent = cleanAgent(currentAgent)
   const nonHubIssues = issues.filter(
@@ -26,7 +33,7 @@ const formatBoard = (issues = [], currentAgent = '') => {
         ?.find((l) => l.name.startsWith('ws:'))
         ?.name.replace('ws:', '') || '-'
     const pLabel = issue.labels?.find((l) => l.name.match(/^p\d$/))?.name || '-'
-    const files = parseScope(issue.body).join(' ') || '-'
+    const files = scopeCell(issue.body)
     const ownerDisplay = owner
       ? owner === cleanCurrent
         ? `*${owner}*`
@@ -73,7 +80,7 @@ const formatSync = ({
       ? yourIssues
           .map(
             (i) =>
-              `  #${i.number} ${i.title} (${parseScope(i.body).join(' ') || '-'})`,
+              `  #${i.number} ${i.title} (${scopeCell(i.body)})`,
           )
           .join('\n')
       : '  (none)',

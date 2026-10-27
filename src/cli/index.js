@@ -427,6 +427,13 @@ const Cli = ({
           return 1
         }
         stdout(`Claimed #${issueNum}`)
+        // #863: an in-review overlap warns rather than fences. Printing it here is what makes the
+        // warning real - the claim still succeeded, so the agent needs to be told a rebase is owed.
+        for (const w of res.warnings || []) {
+          stdout(
+            `  ! overlaps #${w.issue} (${w.status}, held by ${w.agent}) on ${w.files.join(', ')} - rebase after it merges`,
+          )
+        }
         return 0
       }
       if (sub === 'release') {

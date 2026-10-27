@@ -13,13 +13,39 @@ const FENCE = /^(```|~~~)/
 // time so the board and the gate agree on what a declared path is. The bullet strip requires
 // whitespace after the marker, so a `**/*.js` glob survives it.
 const BULLET = /^\s*[-*]\s+/
-const NOT_A_PATH = (path) => path.startsWith('_(') || path.startsWith('#')
+// #863: a `split: #N,#M` line is an AGREEMENT, not a path. The bash variant documents it as the
+// remedy for a collision and pitcairn #831 carries a live one (`split: #813,#830`), but the
+// entry filter only dropped `#`- and `_(`-prefixed lines, so that waiver was parsed as a bogus
+// path and compared against other issues' declarations.
+const SPLIT_LINE = /^(\^)?split:/i
+const NOT_A_PATH = (path) =>
+  path.startsWith('_(') || path.startsWith('#') || SPLIT_LINE.test(path)
 
 const normalizeEntry = (line) =>
   line
     .split(';')
     .map((part) => part.replace(BULLET, '').replace(/`/g, '').trim())
     .filter((part) => part && !NOT_A_PATH(part))
+
+// #863: the issue numbers a `split:` line waives. Line-anchored and fence-skipping, so a
+// documented EXAMPLE of the syntax does not silently grant a real waiver.
+const parseSplits = (body = '') => {
+  const numbers = new Set()
+  let inFence = false
+
+  for (const line of body.split('\n')) {
+    const entry = line.trim()
+    if (FENCE.test(entry)) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
+    if (!SPLIT_LINE.test(entry)) continue
+    for (const match of entry.matchAll(/#(\d+)/g)) numbers.add(Number(match[1]))
+  }
+
+  return numbers
+}
 
 const parseScope = (body = '') => {
   const entries = []
@@ -54,37 +80,77 @@ const parseScope = (body = '') => {
   return entries
 }
 
+const labelNames = (issue) =>
+  (issue?.labels || []).map((l) => (typeof l === 'string' ? l : l.name))
+
+const statusOf = (issue) =>
+  labelNames(issue)
+    .find((name) => name?.startsWith('status:'))
+    ?.replace('status:', '') || 'unclaimed'
+
+// #863: `in-review` means the work is FINISHED and awaiting a human or a teammate, so fencing
+// files against it blocks new work with completed work - measured 4 of 5 unclaimed issues frozen
+// this way on 2026-10-26, and #820 still frozen on 2026-10-27. The remedy for a second author is
+// a rebase after the merge, so it warns. `claimed`, `in-progress` and `blocked` are live edits
+// and still refuse.
+const SOFT_STATUSES = ['in-review']
+
 const checkScopeCollision = (
   targetFiles = [],
   activeIssues = [],
   currentAgent = '',
+  target = {},
 ) => {
   const cleanCurrent = cleanAgent(currentAgent)
+  const splitsHere = parseSplits(target.body)
 
+  const overlaps = []
   for (const issue of activeIssues) {
     const owner = ownerOf(issue)
     if (!owner || owner === cleanCurrent) continue
 
     const issueFiles = parseScope(issue.body)
     const collidingFiles = targetFiles.filter((f) => issueFiles.includes(f))
+    if (!collidingFiles.length) continue
 
-    if (collidingFiles.length) {
-      return {
-        hasCollision: true,
-        collidingIssue: issue.number,
-        collidingAgent: owner,
-        // `collidingFile` stays the first match for existing callers; an agent deciding whether to
-        // split needs the whole set, because the first file alone can look incidental.
-        collidingFile: collidingFiles[0],
-        collidingFiles,
-      }
+    // A recorded split waives the pair in EITHER direction, which is the remedy the bash
+    // variant documents and the only protocol exit this gate has.
+    const waived =
+      splitsHere.has(issue.number) || parseSplits(issue.body).has(target.number)
+    if (waived) continue
+
+    overlaps.push({
+      issue: issue.number,
+      agent: owner,
+      status: statusOf(issue),
+      files: collidingFiles,
+      soft: SOFT_STATUSES.includes(statusOf(issue)),
+    })
+  }
+
+  const warnings = overlaps.filter((o) => o.soft)
+  const hard = overlaps.find((o) => !o.soft)
+
+  if (hard) {
+    return {
+      hasCollision: true,
+      collidingIssue: hard.issue,
+      collidingAgent: hard.agent,
+      collidingStatus: hard.status,
+      // `collidingFile` stays the first match for existing callers; an agent deciding whether to
+      // split needs the whole set, because the first file alone can look incidental.
+      collidingFile: hard.files[0],
+      collidingFiles: hard.files,
+      warnings,
     }
   }
 
-  return { hasCollision: false }
+  return { hasCollision: false, warnings }
 }
 
 module.exports = {
   parseScope,
+  parseSplits,
+  statusOf,
   checkScopeCollision,
 }

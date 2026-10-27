@@ -60,18 +60,38 @@ const CoordService = ({
     }
 
     const allIssues = await withFullTimelines(await github.listIssues())
-    const collision = checkScopeCollision(files, allIssues, cleanCurrent)
+    const collision = checkScopeCollision(files, allIssues, cleanCurrent, {
+      number,
+      body: issue.body,
+    })
     if (collision.hasCollision) {
       return {
         ok: false,
-        error: `#${number} file scope collides with #${collision.collidingIssue} held by ${collision.collidingAgent} (${collision.collidingFiles.join(', ')})`,
+        // #863: name the blocking STATUS and the escape. Without them the refusal does not tell
+        // the claimant whether to wait for a merge, ask for a split, or rebase. The status goes
+        // AFTER the existing wording so the pre-existing message pin is untouched.
+        error:
+          `#${number} file scope collides with #${collision.collidingIssue} held by ${collision.collidingAgent} (${collision.collidingFiles.join(', ')})` +
+          ` - blocking issue is status:${collision.collidingStatus}; a line-anchored 'split: #${number}' in either body waives the pair`,
       }
     }
+
+    // #863: an in-review overlap warns instead of fencing, but a warning nobody sees is not a
+    // warning - it goes to stdout AND into the CLAIM comment, so a teammate reading the timeline
+    // knows this branch owes a rebase.
+    const warnings = collision.warnings || []
+    const warningNote = warnings.length
+      ? '\n\nscope: overlaps in-review work, rebase owed after it merges\n' +
+        warnings
+          .map((w) => `- #${w.issue} (${w.agent}) on ${w.files.join(', ')}`)
+          .join('\n')
+      : ''
 
     const timestamp = now()
     const commentBody =
       `**CLAIM** | agent: agent-${cleanCurrent} | human: @${human} | at: ${timestamp}\n\n` +
-      `plan: ${plan || '_(none given)_'}\neta: ${eta || '_(none given)_'}`
+      `plan: ${plan || '_(none given)_'}\neta: ${eta || '_(none given)_'}` +
+      warningNote
 
     await github.commentIssue(number, commentBody)
     await github.editIssue(number, {
@@ -90,7 +110,7 @@ const CoordService = ({
       }
     }
 
-    return { ok: true, number }
+    return { ok: true, number, warnings }
   }
 
   const release = async (number, { reason = '' } = {}) => {
