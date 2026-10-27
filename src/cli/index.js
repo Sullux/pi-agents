@@ -1,5 +1,6 @@
 const { execSync } = require('node:child_process')
 const { parseArgs } = require('./parseArgs')
+const { HubText } = require('./hubText')
 const { ConfigLoader } = require('../config')
 const { WorkspaceManager } = require('../workspace')
 const { GitHubClient } = require('../github')
@@ -45,6 +46,7 @@ Coordination Commands:
   coord status <issue> <text>        Post heartbeat progress update
   coord done <issue> [--pr <n>]      Mark issue completed
   coord hub <text>                   Post update to coordination hub
+  coord hub --body-file <path>       Post update from a markdown file
 
 System Commands:
   env show <agent> <project>         Show resolved environment variables
@@ -64,6 +66,7 @@ const formatUptime = (ms = 0) => {
 const Cli = ({
   configLoader: customLoader,
   sessionTracker: customTracker,
+  coordFactory: customCoord,
   stdout = console.log,
   stderr = console.error,
 } = {}) => {
@@ -400,7 +403,9 @@ const Cli = ({
       const repo = flags.repo || ''
       const github = GitHubClient({ repo })
       const agent = process.env.COORD_AGENT || 'agent-cli'
-      const coord = CoordService({ github, agent })
+      const coord = customCoord
+        ? customCoord({ github, agent })
+        : CoordService({ github, agent })
 
       if (sub === 'board') {
         stdout(await coord.board())
@@ -411,9 +416,20 @@ const Cli = ({
         return 0
       }
       if (sub === 'hub') {
-        const msg = positionals.slice(1).join(' ')
-        await coord.hub(msg)
-        stdout(`Posted to hub`)
+        const hubText = HubText((path) =>
+          require('node:fs').readFileSync(path, 'utf8'),
+        )
+        const resolved = hubText(flags, positionals.slice(1).join(' '))
+        if (resolved.error) {
+          stderr(resolved.error)
+          return 1
+        }
+        const posted = await coord.hub(resolved.text)
+        if (!posted.ok) {
+          stderr(posted.error)
+          return 1
+        }
+        stdout(`Posted to hub #${posted.hubNumber}`)
         return 0
       }
       if (sub === 'claim') {

@@ -27,6 +27,77 @@ describe('Coordination Protocol: Service Methods', () => {
     assert.ok(!posted[0].body.includes('on starting'))
   })
 
+  // #3: the service guard. An empty body still produced a well-formed 23-byte header
+  // that the API accepted, so nothing downstream objected either - the refusal has to
+  // live here, after the subverb strip and before the call.
+  const emptyHarness = () => {
+    const posted = []
+    const coord = CoordService({
+      github: {
+        commentIssue: async (num, body) => {
+          posted.push({ num, body })
+        },
+      },
+      agent: 'delta',
+      human: 'Sullux',
+    })
+    return { coord, posted }
+  }
+
+  it('hub refuses empty text WITHOUT calling the API', async () => {
+    const { coord, posted } = emptyHarness()
+    const res = await coord.hub('')
+    assert.equal(res.ok, false)
+    assert.equal(posted.length, 0, 'the refusal must precede the post')
+  })
+
+  it('hub refuses whitespace-only text', async () => {
+    const { coord, posted } = emptyHarness()
+    assert.equal((await coord.hub('   \n ')).ok, false)
+    assert.equal(posted.length, 0)
+  })
+
+  it('hub refuses text that the subverb strip empties', async () => {
+    const { coord, posted } = emptyHarness()
+    for (const word of ['on', 'blocked', 'next']) {
+      assert.equal((await coord.hub(word)).ok, false, `${word} strips to empty`)
+    }
+    assert.equal(posted.length, 0)
+  })
+
+  it('hub omits the default entirely - calling it with no argument cannot post', async () => {
+    const { coord, posted } = emptyHarness()
+    assert.equal((await coord.hub()).ok, false)
+    assert.equal(posted.length, 0)
+  })
+
+  // Widening the strip to match a bare subverb must not eat ordinary words that merely
+  // begin with one - the over-fire twin of the refusal pins above. Each case here has the
+  // subverb as a PREFIX of a longer token, so neither `\s+` nor `$` can match it. A whole
+  // leading word followed by a space IS stripped by design (see the 'hub on <text>' pin in
+  // test/cli/hub-verb.test.js), so a case like 'blocked on #872' belongs to that behaviour,
+  // not to this one.
+  it('hub does not strip words that only START with a subverb', async () => {
+    const { coord, posted } = emptyHarness()
+    for (const text of [
+      'once upon a time',
+      'onward to the next wave',
+      'blocked-out rail work continues',
+      'next-generation seed data is pending',
+    ]) {
+      const res = await coord.hub(text)
+      assert.equal(res.ok, true, `should post: ${text}`)
+    }
+    assert.equal(posted.length, 4)
+    assert.ok(posted[0].body.includes('once upon a time'))
+    assert.ok(posted[1].body.includes('onward to the next wave'))
+    assert.ok(
+      posted[2].body.includes('blocked-out rail work continues'),
+      'a hyphenated prefix keeps its first word',
+    )
+    assert.ok(posted[3].body.includes('next-generation seed data is pending'))
+  })
+
   it('review command moves issue to status:in-review and posts comment', async () => {
     let edited = []
     let commented = []
