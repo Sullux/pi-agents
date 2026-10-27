@@ -182,7 +182,15 @@ const CoordService = ({
     if (!cleanedText) {
       return { ok: false, error: 'hub needs a message; nothing was posted' }
     }
-    const commentBody = `${cleanCurrent} | human: @${human}\n${cleanedText}`
+    // #2: hub() posted a bare `alpha | human: @Sullux` header - no verb marker, no
+    // timestamp - while every other protocol verb emits `**CLAIM**`/`**STATUS**`/`**DONE**`
+    // with `at:`. The hub is the documented session entry point, so a SYNC line was not
+    // classifiable by shape and carried no ordering information: two updates from the same
+    // agent were indistinguishable, and the #3 contentless post was indistinguishable from
+    // a terse one. Marker is the FIRST line so a reader can classify without reading bodies.
+    const commentBody =
+      `**SYNC** | agent: agent-${cleanCurrent} | human: @${human} | at: ${now()}` +
+      `\n\n${cleanedText}`
     await github.commentIssue(hubNumber, commentBody)
     return { ok: true, hubNumber }
   }

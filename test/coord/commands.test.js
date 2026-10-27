@@ -98,6 +98,74 @@ describe('Coordination Protocol: Service Methods', () => {
     assert.ok(posted[3].body.includes('next-generation seed data is pending'))
   })
 
+  // #2: hub() emitted no verb marker and no timestamp, so a SYNC line was not
+  // classifiable by shape and two updates from one agent carried no ordering. These pins
+  // inject `now` so the seam is PROVEN traveled rather than assumed - a hardcoded
+  // Date.now() would make `at:` a plausible-looking value that no assertion can pin.
+  const markerHarness = (nowValue) => {
+    const posted = []
+    const coord = CoordService({
+      github: {
+        commentIssue: async (num, body) => {
+          posted.push({ num, body })
+        },
+      },
+      agent: 'bravo',
+      human: 'Sullux',
+      now: () => nowValue,
+    })
+    return { coord, posted }
+  }
+
+  it('hub emits the **SYNC** marker as the FIRST line, shape-classifiable', async () => {
+    const { coord, posted } = markerHarness(1764000000000)
+    await coord.hub('reviewing #943 at the merged tip')
+    assert.equal(
+      posted[0].body.split('\n')[0],
+      '**SYNC** | agent: agent-bravo | human: @Sullux | at: 1764000000000',
+    )
+  })
+
+  it('hub separates the marker from the message with a blank line', async () => {
+    const { coord, posted } = markerHarness(1764000000001)
+    await coord.hub('body text here')
+    const [, blank, message] = posted[0].body.split('\n')
+    assert.equal(
+      blank,
+      '',
+      'blank line after the marker, like CLAIM/STATUS/DONE',
+    )
+    assert.equal(message, 'body text here')
+  })
+
+  it('hub stamps the INJECTED clock, so two posts are orderable', async () => {
+    const early = markerHarness(1764000000100)
+    await early.coord.hub('first update')
+    const late = markerHarness(1764000000900)
+    await late.coord.hub('second update')
+    const at = (b) => Number(b.match(/\| at: (\d+)/)[1])
+    assert.ok(
+      at(early.posted[0].body) < at(late.posted[0].body),
+      'strictly ordered',
+    )
+    assert.equal(
+      at(early.posted[0].body),
+      1764000000100,
+      'the value is the injected now(), not a wall clock',
+    )
+  })
+
+  it('hub still refuses an empty post BEFORE writing any marker', async () => {
+    const { coord, posted } = markerHarness(1764000000200)
+    const res = await coord.hub('   ')
+    assert.equal(res.ok, false)
+    assert.equal(
+      posted.length,
+      0,
+      'a refusal must not emit a marker-only comment',
+    )
+  })
+
   it('review command moves issue to status:in-review and posts comment', async () => {
     let edited = []
     let commented = []
