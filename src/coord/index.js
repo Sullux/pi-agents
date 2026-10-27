@@ -171,7 +171,17 @@ const CoordService = ({
 
   const hub = async (text = '') => {
     const hubNumber = Number(process.env.COORD_HUB || 4)
-    const cleanedText = text.replace(/^(on|blocked|next)\s+/i, '').trim()
+    // #3: the strip also has to match a BARE subverb. `/\s+/` only fires when text
+    // follows, so `page coord hub on` used to post the literal word `on` to the fleet
+    // hub - a contentless coordination signal from a verb that reports success.
+    const cleanedText = text.replace(/^(on|blocked|next)(\s+|$)/i, '').trim()
+    // #3: second of the two guards. The strip above can empty a non-empty argument
+    // (`hub on` resolves to 'on' in the CLI and to '' here), and an empty body still
+    // yields a well-formed header that the API accepts - so refusing has to happen
+    // AFTER cleaning, and BEFORE the call, or a contentless post reports success.
+    if (!cleanedText) {
+      return { ok: false, error: 'hub needs a message; nothing was posted' }
+    }
     const commentBody = `${cleanCurrent} | human: @${human}\n${cleanedText}`
     await github.commentIssue(hubNumber, commentBody)
     return { ok: true, hubNumber }
