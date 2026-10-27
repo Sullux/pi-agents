@@ -438,6 +438,115 @@ describe('Coordination Engine: Scope Normalization (#820)', () => {
   })
 })
 
+// #10: an HTML comment on a Files path line glued itself onto the token, so the declared path
+// matched nothing and the file silently LEFT the collision set. Measured on pitcairn #896: its
+// Files section declared `test/e2e/admin-nav.spec.js  <!-- ADDED by agent-alpha ... -->`, and
+// through THIS parser `paths.includes('test/e2e/admin-nav.spec.js')` was false - so the gate could
+// not see that another agent already held that file and would have waved a claimant into a live
+// double-claim. Same family as #820 (decoration the comparison could not see), different mechanism:
+// a bullet or backtick is a prefix, a comment is a suffix and can carry a `;` of its own.
+describe('Coordination Engine: annotated Files entries (#10)', () => {
+  const holder = (body) => ({
+    number: 896,
+    body,
+    labels: [{ name: 'status:claimed' }],
+    comments: [
+      { body: '**CLAIM** | agent: agent-alpha | human: @Sullux | at: 1' },
+    ],
+  })
+
+  it('parses an annotated path as the bare path', () => {
+    assert.deepEqual(
+      parseScope('## Files\nsrc/a.js  <!-- minted by #896 -->\nsrc/b.js'),
+      ['src/a.js', 'src/b.js'],
+      'the annotation is content-free and the path is a path',
+    )
+  })
+
+  it('does not let a semicolon INSIDE an annotation mint a bogus path', () => {
+    assert.deepEqual(
+      parseScope('## Files\nsrc/a.js <!-- note; not a path -->'),
+      ['src/a.js'],
+      'a comment is stripped before the `;` split, or its prose becomes scope',
+    )
+  })
+
+  it('tolerates the exact pitcairn #896 line that hid a held file', () => {
+    const scope = parseScope(
+      '## Files\n' +
+        'test/e2e/admin.spec.js\n' +
+        'test/e2e/admin-nav.spec.js  <!-- ADDED by agent-alpha for #896 box 1: the sidebar inventory -->\n' +
+        '## Notes\nnone',
+    )
+    assert.ok(
+      scope.includes('test/e2e/admin-nav.spec.js'),
+      `the annotated entry must be visible to the gate, got ${JSON.stringify(scope)}`,
+    )
+    assert.equal(scope.length, 2, 'no annotation fragments leak into scope')
+  })
+
+  it('drops an unterminated annotation at end of line, and its lone `-->` on the next', () => {
+    assert.deepEqual(
+      parseScope('## Files\nsrc/a.js <!-- note\n-->\nsrc/b.js'),
+      ['src/a.js', 'src/b.js'],
+      'a dangling comment is still not a path, and neither is its closing fragment',
+    )
+  })
+
+  it('keeps a whole-line comment out of scope', () => {
+    assert.deepEqual(
+      parseScope('## Files\n<!-- nothing declared here -->\nsrc/a.js'),
+      ['src/a.js'],
+    )
+  })
+
+  it('makes the gate collide on a file it previously missed', () => {
+    const annotated = holder(
+      '## Files\ntest/e2e/admin-nav.spec.js  <!-- added while I was writing this issue -->',
+    )
+    const clash = checkScopeCollision(
+      ['test/e2e/admin-nav.spec.js'],
+      [annotated],
+      'bravo',
+    )
+    assert.equal(
+      clash.hasCollision,
+      true,
+      'an annotated declaration is still a declaration',
+    )
+    // the real contract is flat - collidingIssue / Agent / Status / File - and the gate's whole
+    // job is to NAME the holder to the claimant, so every witness is asserted, not just the boolean
+    assert.equal(
+      clash.collidingIssue,
+      896,
+      'names the issue that holds the file',
+    )
+    assert.equal(clash.collidingAgent, 'alpha', 'and the agent holding it')
+    assert.equal(
+      clash.collidingStatus,
+      'claimed',
+      'and that the claim is live, not a closed shell',
+    )
+    assert.deepEqual(
+      clash.collidingFiles,
+      ['test/e2e/admin-nav.spec.js'],
+      'the overlap is the bare path',
+    )
+  })
+
+  it('still refuses to fabricate a collision from an unrelated annotated section', () => {
+    const unrelated = holder(
+      '## Files\nsrc/other/place.js  <!-- see the notes below -->',
+    )
+    assert.equal(
+      checkScopeCollision(['test/e2e/admin-nav.spec.js'], [unrelated], 'bravo')
+        .hasCollision,
+      false,
+      'stripping a comment does not turn prose into a matching path',
+    )
+  })
+})
+
 // #826: `gh issue list --json comments` returns only the FIRST 100 comments of an issue
 // (measured on hub #4: 100 returned against 645 real), and every consumer here is
 // timeline-dependent - `slice(-5)` for the hub tail, last-protocol-comment-wins for OWNER.

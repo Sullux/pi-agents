@@ -18,11 +18,27 @@ const BULLET = /^\s*[-*]\s+/
 // entry filter only dropped `#`- and `_(`-prefixed lines, so that waiver was parsed as a bogus
 // path and compared against other issues' declarations.
 const SPLIT_LINE = /^(\^)?split:/i
+// #10: a comment fragment must never become a path. Stripping an annotation can leave a bare
+// `-->` on the following line when an author opens `<!--` and closes it later, and that token
+// starts with none of the prefixes the filter knows, so it would be compared as a declared path.
+const COMMENT_FRAGMENT = /^(<!--|-->)/
 const NOT_A_PATH = (path) =>
-  path.startsWith('_(') || path.startsWith('#') || SPLIT_LINE.test(path)
+  path.startsWith('_(') ||
+  path.startsWith('#') ||
+  SPLIT_LINE.test(path) ||
+  COMMENT_FRAGMENT.test(path)
 
+// #10: annotations arrive ON the path line - `src/a.js <!-- minted by #896 -->` - and the entry was
+// compared verbatim afterwards, so the annotated token equalled no real path and the file silently
+// LEFT the collision set. Measured on pitcairn #896: its Files line declared
+// `test/e2e/admin-nav.spec.js  <!-- ... -->`, and `paths.includes('test/e2e/admin-nav.spec.js')` was
+// false through the canonical parser. Stripped BEFORE the `;` split, because an annotation that
+// contains a semicolon would otherwise be cut into extra bogus paths. Comments are a per-line
+// affair: an opening `<!--` runs to end of line, and its `-->` is dropped as a fragment above.
+const HTML_COMMENT = /[ \t]*<!--[\s\S]*/g
 const normalizeEntry = (line) =>
   line
+    .replace(HTML_COMMENT, '')
     .split(';')
     .map((part) => part.replace(BULLET, '').replace(/`/g, '').trim())
     .filter((part) => part && !NOT_A_PATH(part))
