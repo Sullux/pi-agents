@@ -1,6 +1,38 @@
 const path = require('node:path')
 const os = require('node:os')
 
+// #865: the seed SKILL.md is machine-independent, so the one path that IS derivable
+// from the provisioning target is written as a token and resolved at copy time.
+const SKILL_DIR_TOKEN = '{{COORD_SKILL_DIR}}'
+
+// #865: the shim a freshly provisioned workspace gets. It used to be a 3-line spawn
+// whose exit status was dropped, so a REFUSED claim, a scope collision or a typo'd
+// verb all read as success to anything gating on $? - the hazard #816 closed for the
+// fleet's installed copy, which a new workspace never received. Kept byte-identical
+// to that installed copy so there is one shim behaviour, not two.
+const COORD_JS_SHIM = [
+  '#!/usr/bin/env node',
+  "// #816: this shim is the fleet's documented entry point, and it used to swallow the exit status -",
+  '// `page coord <unknown verb>` exits 1, but every call through here exited 0. Any script gating on',
+  '// `$?` (claim && start-work, a CI step, a `set -e` wrapper) therefore treated a REFUSED claim, a',
+  "// scope collision or a typo'd verb as success. Propagate the real status; `?? 1` covers a",
+  '// signal-kill, where spawnSync reports status null.',
+  "const { spawnSync } = require('node:child_process')",
+  '',
+  "const result = spawnSync('page', ['coord', ...process.argv.slice(2)], {",
+  "  stdio: 'inherit',",
+  '  env: process.env,',
+  '})',
+  '',
+  'if (result.error) {',
+  '  console.error(`coord: cannot run \\`page coord\\`: ${result.error.message}`)',
+  '  process.exit(1)',
+  '}',
+  '',
+  'process.exit(result.status ?? 1)',
+  '',
+].join('\n')
+
 const ProfileManager = ({
   fs = require('node:fs'),
   homeDir = os.homedir(),
@@ -81,23 +113,54 @@ const ProfileManager = ({
     }
 
     const skillRoot = path.join(targetPath, '.agents', 'skills', 'coordinate')
+    const sourceSkillRoot = path.resolve(
+      __dirname,
+      '../../.agents/skills/coordinate',
+    )
     const skillMdPath = path.join(skillRoot, 'SKILL.md')
     if (fs.existsSync && !fs.existsSync(skillMdPath) && fs.writeFileSync) {
-      const sourceSkill = path.resolve(
-        __dirname,
-        '../../.agents/skills/coordinate/SKILL.md',
-      )
+      const sourceSkill = path.join(sourceSkillRoot, 'SKILL.md')
       if (fs.existsSync(sourceSkill) && fs.readFileSync) {
-        fs.writeFileSync(skillMdPath, fs.readFileSync(sourceSkill, 'utf8'))
+        // #865: resolve the seed's one derivable path to THIS workspace. It stays
+        // absolute because #816 measured the relative form failing from inside a
+        // project worktree; split/join rather than replaceAll so a partial-mock fs
+        // and older runtimes behave identically.
+        const seed = fs.readFileSync(sourceSkill, 'utf8')
+        fs.writeFileSync(
+          skillMdPath,
+          seed.split(SKILL_DIR_TOKEN).join(skillRoot),
+        )
+      }
+    }
+
+    // #865: SKILL.md links ./references/*.md for the start-of-session playbook and
+    // the verb/tie-break spec. Provisioning copied SKILL.md alone, so a fresh
+    // workspace was told to read two files that did not exist. Same copy-only-when-
+    // absent rule as every other file here, so a workspace's own edits survive.
+    const sourceRefsRoot = path.join(sourceSkillRoot, 'references')
+    const refsRoot = path.join(skillRoot, 'references')
+    if (
+      fs.existsSync &&
+      fs.existsSync(sourceRefsRoot) &&
+      fs.readdirSync &&
+      fs.mkdirSync &&
+      fs.writeFileSync &&
+      fs.readFileSync
+    ) {
+      fs.mkdirSync(refsRoot, { recursive: true })
+      for (const entry of fs.readdirSync(sourceRefsRoot)) {
+        const source = path.join(sourceRefsRoot, entry)
+        const target = path.join(refsRoot, entry)
+        const isFile = fs.statSync ? fs.statSync(source).isFile() : true
+        if (isFile && !fs.existsSync(target)) {
+          fs.writeFileSync(target, fs.readFileSync(source, 'utf8'))
+        }
       }
     }
 
     const coordJsPath = path.join(skillScriptsDir, 'coord.js')
     if (fs.existsSync && !fs.existsSync(coordJsPath) && fs.writeFileSync) {
-      fs.writeFileSync(
-        coordJsPath,
-        `#!/usr/bin/env node\nconst { spawnSync } = require('node:child_process')\nspawnSync('page', ['coord', ...process.argv.slice(2)], { stdio: 'inherit', env: process.env })\n`,
-      )
+      fs.writeFileSync(coordJsPath, COORD_JS_SHIM)
       if (fs.chmodSync) fs.chmodSync(coordJsPath, 0o755)
     }
 

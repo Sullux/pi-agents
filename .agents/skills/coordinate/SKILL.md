@@ -23,15 +23,38 @@ Read the active
 [v3 playbook](./references/coordination-best-practices-3.md) before
 starting work. It supersedes the sprint-era v1 and v2 playbooks.
 
-All commands go through one script so every agent applies the same
-rules (label transitions, race checks, stale detection). Run it from
-anywhere inside the repo:
+All commands go through ONE tool so every agent applies the same
+rules (label transitions, race checks, scope gates).
+
+**Authoritative implementation** (#816): the `page` package, invoked as
+`page coord <verb>`. Resolve its real location with
+`readlink -f $(which page)` before citing a path - the checkout differs per
+machine, and a path hardcoded in a seeded file rots. Version `0.1.0`; the
+scope gate needs commit `4edf471` or later. The entries under this skill's
+`scripts/` are shims onto it:
 
 ```bash
-COORD="node .agents/skills/coordinate/scripts/coord.js"
-# or backward-compatible shim:
-# COORD="bash .agents/skills/coordinate/scripts/coord.sh"
+COORD="node {{COORD_SKILL_DIR}}/scripts/coord.js"
+# both are provisioned from pi-agents' tracked .agents/skills/coordinate/scripts/
+# coord.js  spawns `page coord` and PROPAGATES its exit status - a refused claim,
+#           a scope collision or a typo'd verb must not read as success (#816)
+# coord.sh  execs coord.js
 ```
+
+Use an ABSOLUTE path. The relative form this file used to document
+(`node .agents/skills/coordinate/scripts/coord.js`) does not resolve from
+inside a project worktree - measured `MODULE_NOT_FOUND` from an agent's
+`<agents-root>/<name>/pp` worktree - and that is how an agent ends up running
+whatever copy it finds instead.
+
+**Non-authoritative copy in circulation**: a 647-line bash `coord.sh`, md5
+`b20ca1e954e783fe3771180092108ca7`, seen at `/tmp/coord.sh` and
+`/tmp/coordinate-skill-backup/scripts/coord.sh` (the original lives in the
+Dominic project). Do NOT run it, and do not report its behaviour as the
+fleet's: it has no scope gate, no claim race, no stale detection, and its
+`files_of` word-tokenizes, so it refuses claims over English function words.
+Verify which implementation you are invoking before trusting any gate
+verdict - `readlink -f $(which page)`.
 
 ## Identity
 
@@ -162,15 +185,15 @@ command is not evidence that the gates passed.
 
 | Invariant | Current behavior |
 | --- | --- |
-| Canonical hub | Bash is deterministic; PowerShell currently requires one open `hub` label |
-| Claim file scope | Displayed by `board`; overlap resolution is manual |
+| Canonical hub | `COORD_HUB` when set, else the lowest-numbered open issue labelled `hub` |
+| Claim file scope | Enforced on `claim`: `parseScope` reads the issue's `## Files`, `checkScopeCollision` refuses a real overlap and exits 1 |
 | Review file scope | Manual comparison against the union of linked issue scopes |
 | Completion | Manual check of criteria and merged PR before `done` |
 | Provisional contract | Manual edit of `## Agreed` after `propose` |
 
 The manual rows are protocol requirements and candidates for helper
 enforcement. See the
-[v3 enforcement rationale](../../../docs/agents/coordination-best-practices-3.md#enforcement-status).
+[v3 enforcement rationale](references/coordination-best-practices-3.md#enforcement-status).
 
 ## Commands
 
@@ -183,12 +206,12 @@ enforcement. See the
 | `new "title" --ws X [--p 0-2] [--type task\|contract\|decision\|bug] [--files G] [--done "a;b"] [--depends "#n"] [--body T] [--claim]` | Create an issue from the template |
 | `claim N [--plan T] [--eta T]` | Assign yourself; refuses if owned; resolves races |
 | `release N [--reason T] [--stale]` | Unassign; `--stale` may release anyone's stale claim |
-| `status N "text"` | Heartbeat plus progress; moves claimed to in-progress |
+| `status N "text"` | Heartbeat plus progress. Does NOT move `claimed` to `in-progress`; transition with `gh issue edit N --add-label status:in-progress` |
 | `block N --by "#m or @user" "text"` / `unblock N "text"` | Mark blocked / unblocked |
 | `question N [--to @u] [--human] "text"` / `answer N "text"` | Ask / answer; `--human` adds needs-human |
 | `propose N [--to @u] "text"` / `accept N ["text"]` / `counter N "text"` / `reject N "reason"` | Negotiate |
 | `handoff N --to @user "text"` | Transfer ownership |
-| `review N --pr URL` | Mark in-review after the caller verifies PR scope |
+| `review N --pr N` | Mark in-review after the caller verifies PR scope. `--pr` takes the PR NUMBER (rendered `pr: #N`), not a URL |
 | `done N [--pr URL] ["text"]` | Close after the caller verifies criteria and merge state |
 | `stale` | Claims silent longer than `COORD_STALE_MIN` (default 45; sprint 30) |
 | `show N` | Print an issue with its structured comment history |
@@ -196,6 +219,105 @@ enforcement. See the
 Every verb, its comment format, and the tie-break rules are specified
 in [references/protocol.md](references/protocol.md). Read it when you
 need to parse comments yourself or hit a case not covered above.
+
+### Verbs that do NOT exist in the authoritative tool
+
+`page coord` implements exactly eight verbs (`src/cli/index.js`): `board`,
+`sync`, `hub`, `claim`, `release`, `status`, `review`, `done`. Every other
+row in the table above falls through to `printHelp()` and exits 1 - it does
+not exist and it does not warn, so the issue silently never moves. Read from
+the parser, not from prose in this file: help text like
+`coord.sh hub on|blocked|next "text"` made a whole session post the literal
+word `on` as its hub update (#387).
+
+| Documented but missing | Substitute |
+| --- | --- |
+| `new`, `setup` | `gh issue create`, `gh issue edit` with the labels below |
+| `block`, `unblock`, `question`, `answer` | `gh issue comment` + `gh issue edit --add-label` |
+| `propose`, `accept`, `counter`, `reject`, `handoff` | `gh issue comment` in the protocol's comment format |
+| `show`, `stale` | `gh issue view N --json body,comments,labels,assignees` |
+
+### Scope-gate behaviour worth knowing before you trust a refusal
+
+- `parseScope` matches `## Files` only at the START OF A LINE and skips
+  fenced code blocks (#816). Before that fix an issue documenting the Files
+  section parsed its own prose as scope and lost its real paths (measured on
+  #816 itself: 14 prose entries, 0 paths), and a fenced example contributed
+  its example path plus the closing fence. Both are pinned in
+  `pi-agents/test/coord/coord.test.js`.
+- Comparison is whole-line set intersection, so prose inside a `## Files`
+  section cannot fabricate a collision. A refusal citing English function
+  words (`on: the,the,for,the`) came from the non-authoritative bash copy.
+- The gate SKIPS issues you already claim, by design: the owner cannot
+  collide with itself. The consequence is asymmetric - annotate your own
+  Files section with prose and you can make an unrelated issue unclaimable
+  for everyone else while never seeing the error, because the only agent
+  exempted from the check is the one who caused it. Keep `## Files`
+  prose-free; put narrowing notes under their own heading.
+- An H3 subsection inside `## Files` does NOT close the section: its heading
+  line is dropped, but every other line under it is read as a path. Close
+  the section with an H2 (`## Notes`) instead of a subheading.
+- Scope entries are NORMALIZED before comparison (pi-agents `4edf471`):
+  list bullets and backticks are stripped, and `;`-joined declarations split
+  into one path each. So `- \`src/a.js\`` and `src/a.js;test/b.spec.js` do
+  collide with a bare `src/a.js`, as they always should have. A trailing
+  prose clause is still NOT stripped (`src/a.js - the route` stays one token
+  and will not collide), so declare bare paths, one per line, and put
+  commentary in another section.
+- The refusal names EVERY colliding file, not just the first - one shared
+  file can look incidental when two are actually in conflict.
+
+- Why this mattered: #820 declared `- \`post.astro\``-style bullets while
+  in-flight #770 declared `post.astro;test/e2e/resident.spec.js` on one
+  line. The gate returned `hasCollision:false` on a pair sharing TWO files,
+  while #820's own body told the claimer to expect a `split:` refusal.
+  Measured across all 18 live claims: 1 collision detected before the fix,
+  5 after, and all 4 newly-found ones were real.
+
+#### Status-aware collisions and the `split:` escape (#863, measured 2026-10-27)
+
+The gate used to treat every open issue alike, so work that was FINISHED
+fenced work that had not started. Measured 2026-10-26: 5 of 5 unclaimed
+issues were unclaimable, 4 of them frozen by an issue merely sitting in
+review. Re-measured 2026-10-27: #820, the board's only unclaimed issue,
+still refused against in-review #786 on two paths. Current semantics:
+
+| Overlapping issue's status | Effect |
+| --- | --- |
+| `status:in-review` | WARNS - the claim succeeds, you owe a rebase after it merges |
+| `status:claimed`, `status:in-progress`, `status:blocked` | REFUSES - those are live edits |
+| no status label, or `status:unclaimed`, but owned | REFUSES |
+| owned by YOU | skipped entirely, as before |
+
+A warning is not silent: `claim` prints one line per overlap and the CLAIM
+comment carries a `scope:` note, so a teammate reading the timeline knows
+your branch owes a rebase.
+
+**Recording a split.** A line-anchored `split: #N` (or `split: #N,#M`) in
+EITHER body waives the collision between exactly that pair and no other -
+put it on its own line, in the other issue's body or your own. This is the
+remedy the bash variant always documented and pitcairn #831 already carries
+in the wild; the canonical gate honours it as of this change. Two cautions:
+
+- A `split:` line is an AGREEMENT, never a path. It is filtered out of scope
+  parsing, so #831's live line no longer masquerades as a declared file.
+- A FENCED `split:` example grants no waiver, so documenting the syntax in
+  an issue body is safe.
+
+A hard refusal now names the blocking issue's status and the escape, e.g.
+`... held by delta (src/a.js) - blocking issue is status:in-progress; a
+line-anchored 'split: #820' in either body waives the pair`. Read the status
+before reacting: `in-progress` means negotiate or wait, and if it names an
+issue whose PR has already merged, the label is stale - `gh pr view` before
+you trust it.
+
+**The board marks an unparseable scope loudly.** An issue whose Files heading
+is an H3, or whose section is prose-only, parses to ZERO entries: `claim`
+refuses it with `declares no Files scope` while the board used to print `-`,
+the same cell an absent `ws:`/`p` label gets. pitcairn #769 rendered as free
+and refused at claim time - two surfaces disagreeing about one fact. Such a
+row now prints `!!NO-SCOPE`. If you see it, the issue needs its heading fixed
+to a line-start `## Files` before anyone can claim it.
 
 ## Working agreements, and why
 
@@ -233,3 +355,25 @@ need to parse comments yourself or hit a case not covered above.
 | priority | `p0` `p1` `p2` | `p0` is on the demo golden path |
 | `type:` | `task` `contract` `decision` `bug` | Kind of issue |
 | flags | `needs-human` `hub` | Escalation; the pinned hub issue |
+
+## Seeding and provisioning (#865)
+
+This file is the tracked SEED that `profile.js` copies into every newly
+provisioned workspace, so it is written to be machine-independent:
+
+- Paths derivable from the provisioning target are written as a mustache
+  token naming the skill directory, which `ensureProfileStructure`
+  substitutes with that workspace's own absolute skill directory at copy
+  time - so the token appears in the seed only and never in an installed
+  copy. They stay ABSOLUTE because #816 measured the relative form failing
+  from inside a project worktree.
+- Machine-level paths (the pi-agents checkout) are deliberately NOT
+  hardcoded. Resolve them at runtime with `readlink -f $(which page)`.
+- `references/` is provisioned alongside this file, so both
+  `references/...` links above resolve in a fresh workspace.
+
+Do not "fix" this file by copying an installed workspace's SKILL.md back
+over it: that re-hardcodes one box's absolute paths into every future
+workspace, which is the defect #816 exists to prevent. Drift runs one way -
+seed to install - and the install copy is only written when absent, so an
+edit made here reaches NEW workspaces and never existing ones.
