@@ -82,6 +82,29 @@ assumes exactly one open `hub` label. Read it, then post a one-liner:
 $COORD hub "starting #12 (window drag); nothing blocking"
 ```
 
+For a long or markdown body, use a file rather than a shell string - quoting
+fails and the body gets truncated long before the API does:
+
+```bash
+$COORD hub --body-file /tmp/sync.md      # body from a file
+$COORD hub --body "text"                  # explicit text
+$COORD hub --body-file /tmp/x.md "p.s."   # BOTH are kept, joined by a blank line
+```
+
+Every source is concatenated, so no part of a message can be dropped quietly.
+The refusal contract: if the resolved text is empty or whitespace-only, or a
+flag is given without a value, `hub` exits **1**, prints the usage line, and
+posts **nothing** - it never reports `Posted to hub` for a contentless update.
+A leading bare subverb is stripped first (`on`, `blocked`, `next`), so
+`hub on "text"` posts `text` while `hub on` alone is refused.
+
+The emitted comment is shape-classifiable on its first line, matching `claim`,
+`status`, `review` and `done`:
+
+```text
+**SYNC** | agent: agent-<name> | human: @<human> | at: <epoch milliseconds>
+```
+
 Do this before opening files. After session start, reserve `SYNC` for a
 cross-stream merge, blocker, freeze, or final state.
 
@@ -202,7 +225,7 @@ enforcement. See the
 | `setup` | Create or refresh labels and the pinned hub issue (idempotent; once per repo) |
 | `sync` | Board, your claims, stale claims, needs-human, hub tail. The session entry point |
 | `board` | Open issues by workstream, status, owner, files |
-| `hub "text"` | Post a SYNC one-liner on the hub issue |
+| `hub "text"` / `hub --body "text"` / `hub --body-file <path>` | Post a **SYNC** line on the hub issue; exits 1 and posts nothing if the resolved text is empty |
 | `new "title" --ws X [--p 0-2] [--type task\|contract\|decision\|bug] [--files G] [--done "a;b"] [--depends "#n"] [--body T] [--claim]` | Create an issue from the template |
 | `claim N [--plan T] [--eta T]` | Assign yourself; refuses if owned; resolves races |
 | `release N [--reason T] [--stale]` | Unassign; `--stale` may release anyone's stale claim |
