@@ -1,6 +1,11 @@
 const { cleanAgent, ownerOf, isMine, hasClaimBy } = require('./owner')
 const { isIssueNumber } = require('./issueNumber')
-const { parseScope, checkScopeCollision, labelNames } = require('./scope')
+const {
+  parseScope,
+  checkScopeCollision,
+  labelNames,
+  filesSectionDiagnosis,
+} = require('./scope')
 const { evaluateClaimRace, liveClaims } = require('./race')
 const { formatBoard, formatSync } = require('./formatters')
 // #29 guard 2 lives with guard 1 in src/cli/hubText.js, which is where hub-text rules
@@ -116,7 +121,13 @@ const CoordService = ({
 
     const files = parseScope(issue.body)
     if (!files.length) {
-      return { ok: false, error: `#${number} declares no Files scope` }
+      // #26: the bare "declares no Files scope" was a catch-all for "the parser could not see mine",
+      // so an author whose section used a setext heading was told the section was missing. The phrase
+      // stays (four arms match on it); the real reason rides along.
+      return {
+        ok: false,
+        error: `#${number} declares no Files scope - ${filesSectionDiagnosis(issue.body)}`,
+      }
     }
 
     const allIssues = await withFullTimelines(await github.listIssues())

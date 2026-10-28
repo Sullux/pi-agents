@@ -22,11 +22,32 @@ const SPLIT_LINE = /^(\^)?split:/i
 // `-->` on the following line when an author opens `<!--` and closes it later, and that token
 // starts with none of the prefixes the filter knows, so it would be compared as a declared path.
 const COMMENT_FRAGMENT = /^(<!--|-->)/
+// #26: a setext underline is heading punctuation, never a path. Measured before the fix: a body
+// with an ATX `## Files` followed by a setext `Notes` + `----` returned
+// ["src/a.js", "Notes", "-----", "y"] - three junk paths from three prose lines, and a `-----`
+// token collides with every other converted issue that declares one. The section walk also skips
+// each underline explicitly; this filter is what makes a stray one (a thematic break between two
+// path lines) impossible to emit.
+const SETEXT_UNDERLINE = /^\s*[-=]{3,}\s*$/
+const UNDERLINE_TOKEN = /^[-=]{3,}$/
 const NOT_A_PATH = (path) =>
   path.startsWith('_(') ||
   path.startsWith('#') ||
+  UNDERLINE_TOKEN.test(path) ||
   SPLIT_LINE.test(path) ||
   COMMENT_FRAGMENT.test(path)
+
+// #26: setext headings. `Files` followed immediately by a line of `-----` (or `=====`) declares
+// the same section as `## Files`, and `Notes` + `-----` closes it the same way `## Notes` does.
+// Adjacency is required, not merely "the next non-empty line": in CommonMark a `----` after a
+// blank line is a thematic break, and treating a rule as a heading would close a section on
+// content that divides it. Mirrors the ATX forms the parser already accepts: `## Files` is a
+// PREFIX (`## Files (paths)` opens), so the setext text uses \b rather than an exact match.
+const FILES_NAME = /^files\b/i
+const isSetextHeading = (lines, i) =>
+  (lines[i] ?? '').trim() !== '' &&
+  SETEXT_UNDERLINE.test(lines[i + 1] ?? '') &&
+  !SETEXT_UNDERLINE.test(lines[i])
 
 // #10: annotations arrive ON the path line - `src/a.js <!-- minted by #896 -->` - and the entry was
 // compared verbatim afterwards, so the annotated token equalled no real path and the file silently
@@ -65,10 +86,12 @@ const parseSplits = (body = '') => {
 
 const parseScope = (body = '') => {
   const entries = []
+  const lines = body.split('\n')
   let inFence = false
   let inFiles = false
 
-  for (const line of body.split('\n')) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
     const entry = line.trim()
 
     if (FENCE.test(entry)) {
@@ -77,14 +100,22 @@ const parseScope = (body = '') => {
     }
     if (inFence) continue
 
-    if (/^## Files/.test(line)) {
+    // #26: the underline belongs to the heading, so it is consumed here rather than left to the
+    // token filter - a section opener that also emits its own punctuation is how the next reader
+    // gets a `-----` in their scope list.
+    const opensFiles = /^## Files/.test(line)
+    const opensSetext = isSetextHeading(lines, i) && FILES_NAME.test(entry)
+    if (opensFiles || opensSetext) {
       inFiles = true
+      if (opensSetext) i += 1
       continue
     }
     // Any other H2 closes the section, exactly as the old `\n##` terminator did. An H3
-    // subsection stays content - it is dropped by the `#` filter below, unchanged.
-    if (/^## /.test(line)) {
+    // subsection stays content - it is dropped by the `#` filter below, unchanged. A setext
+    // heading closes it too, which is the half that stops prose from becoming paths.
+    if (/^## /.test(line) || isSetextHeading(lines, i)) {
       inFiles = false
+      if (isSetextHeading(lines, i)) i += 1
       continue
     }
 
@@ -94,6 +125,32 @@ const parseScope = (body = '') => {
   }
 
   return entries
+}
+
+// #26 box 5: `declares no Files scope` was a catch-all for "the parser could not see mine", which
+// sent authors hunting for a missing section that was sitting right there under a heading style the
+// reader ignored. The claim path now names WHICH failure it is, so an unclaimable issue says why in
+// its own words.
+const filesSectionDiagnosis = (body = '') => {
+  const lines = body.split('\n')
+  let inFence = false
+  for (let i = 0; i < lines.length; i++) {
+    const entry = (lines[i] ?? '').trim()
+    if (FENCE.test(entry)) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
+    const heading =
+      /^##\s+Files\b/i.test(entry) ||
+      (isSetextHeading(lines, i) && FILES_NAME.test(entry))
+    if (heading) {
+      return parseScope(body).length
+        ? 'the Files section parsed fine'
+        : 'a Files heading exists but its section names no paths'
+    }
+  }
+  return 'no Files heading in either form (## Files, or Files followed by ----)'
 }
 
 const labelNames = (issue) =>
@@ -167,6 +224,7 @@ const checkScopeCollision = (
 module.exports = {
   parseScope,
   parseSplits,
+  filesSectionDiagnosis,
   labelNames,
   statusOf,
   checkScopeCollision,
