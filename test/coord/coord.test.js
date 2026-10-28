@@ -1057,3 +1057,171 @@ describe('Coordination Engine: status-aware scope collision (#863)', () => {
     )
   })
 })
+
+describe('Coordination Engine: a third-party close-out does not de-own (pi-agents#12)', () => {
+  // Quoted from the live instance so this is anchored to real text, not a paraphrase of it:
+  // pitcairn-portal#1030 was claimed by alpha, closed by bravo with a SIGNED `**DONE**`,
+  // reopened by alpha, and the board rendered OWNER as `-` while `checkScopeCollision` waved
+  // every other agent through the file alpha was actively working in.
+  const CLAIM_ALPHA = {
+    body: '**CLAIM** | agent: agent-alpha | human: @Sullux | at: 1793157521044\n\nplan: hermetic repro',
+  }
+  const CLAIM_FOXTROT = {
+    body: '**CLAIM** | agent: agent-foxtrot | human: @Sullux | at: 1793159951972\n\nplan: observe',
+  }
+  const DONE_BRAVO = {
+    body: '**DONE** | agent: pi/bravo | at: 1793159021394 | pr: #1033',
+  }
+  const DONE_ALPHA = {
+    body: '**DONE** | agent: agent-alpha | at: 1793159021395 | pr: #1033',
+  }
+  const DONE_UNATTRIBUTED = { body: '**DONE** | pr: #123' }
+  const RELEASE_BRAVO = {
+    body: '**RELEASE** | agent: pi/bravo | reason: standing down',
+  }
+  const CLAIM_DELTA = {
+    body: '**CLAIM** | agent: agent-delta | human: @Sullux | at: 1793160000000',
+  }
+
+  const SPEC = 'test/e2e/admin-fetch-failure.spec.js'
+  const mk = (comments) => ({
+    number: 1030,
+    title: 'the manifest stale-note pin has no repro that fires on demand',
+    body: `## Files\n${SPEC}`,
+    labels: [],
+    comments,
+  })
+  // the target whose claim we are gating: a DIFFERENT agent (foxtrot) reaching for the same file
+  const peer = {
+    number: 1042,
+    body: `## Files\n${SPEC}`,
+    labels: [{ name: 'status:claimed' }],
+    comments: [CLAIM_FOXTROT],
+  }
+  const target = { number: 2000, body: `## Files\n${SPEC}` }
+  const SCOPE = [SPEC]
+
+  it('ownerOf survives a close-out signed by someone other than the holder', () => {
+    assert.equal(ownerOf(mk([CLAIM_ALPHA, DONE_BRAVO])), 'alpha')
+    // ...and a bystander RELEASE is the same class of act, so it behaves the same way.
+    assert.equal(ownerOf(mk([CLAIM_ALPHA, RELEASE_BRAVO])), 'alpha')
+    // the holder's OWN close-out still frees the issue - that is what #800's lesson requires.
+    assert.equal(ownerOf(mk([CLAIM_ALPHA, DONE_ALPHA])), '')
+    // an unattributed close-out still clears (documented divergence from race.js, below).
+    assert.equal(ownerOf(mk([CLAIM_ALPHA, DONE_UNATTRIBUTED])), '')
+    // a fresh claim after a third-party DONE takes the issue honestly.
+    assert.equal(ownerOf(mk([CLAIM_ALPHA, DONE_BRAVO, CLAIM_DELTA])), 'delta')
+    // and a lone DONE invents no owner.
+    assert.equal(ownerOf(mk([DONE_BRAVO])), '')
+  })
+
+  it('the fence fires identically for CLAIM-only and CLAIM-then-third-party-DONE', () => {
+    const held = mk([CLAIM_ALPHA])
+    const bystanderClosed = mk([CLAIM_ALPHA, DONE_BRAVO])
+
+    // Non-vacuity floor, per the harness rule that a green `hasCollision:false` is not evidence:
+    // arm A's own witness must be a resolved owner, or the pair could be passing on a fixture
+    // that never produced a claim in the first place.
+    assert.equal(
+      ownerOf(held),
+      'alpha',
+      'arm A must resolve a holder before the pair means anything',
+    )
+    assert.deepEqual(
+      bystanderClosed.comments.slice(0, -1),
+      held.comments,
+      'the two arms may differ ONLY by the trailing close-out',
+    )
+
+    const a = checkScopeCollision(SCOPE, [held], 'foxtrot', target)
+    const b = checkScopeCollision(SCOPE, [bystanderClosed], 'foxtrot', target)
+
+    assert.equal(
+      a.hasCollision,
+      true,
+      `CLAIM-only must fence: ${JSON.stringify(a)}`,
+    )
+    assert.equal(
+      b.hasCollision,
+      true,
+      `a third-party DONE must not silently un-fence: ${JSON.stringify(b)}`,
+    )
+    // named, not merely "some collision" - otherwise a stray fixture could satisfy the pair.
+    assert.equal(b.collidingAgent, 'alpha')
+    assert.equal(b.collidingIssue, 1030)
+    assert.deepEqual(b.collidingFiles, SCOPE)
+
+    // CONTROL, the other half of non-vacuity: the fence must still LIFT when the holder
+    // closes their own work, or "always colliding" would look identical to "fixed".
+    const selfClosed = checkScopeCollision(
+      SCOPE,
+      [mk([CLAIM_ALPHA, DONE_ALPHA])],
+      'foxtrot',
+      target,
+    )
+    assert.equal(selfClosed.hasCollision, false, JSON.stringify(selfClosed))
+    assert.equal(
+      ownerOf(mk([CLAIM_ALPHA, DONE_ALPHA])),
+      '',
+      "the control's witness",
+    )
+  })
+
+  it('board renders the holder of a reopened issue a bystander closed', () => {
+    const { formatBoard } = require('../../src/coord/formatters')
+    const rowFor = (out) =>
+      out.split('\n').find((line) => line.includes('#1030')) || ''
+
+    const held = rowFor(formatBoard([mk([CLAIM_ALPHA, DONE_BRAVO])], 'delta'))
+    assert.ok(
+      held.includes('alpha'),
+      `OWNER column must name the holder: ${held}`,
+    )
+    // the control arm again: a self-signed DONE really does vacate the column.
+    const freed = rowFor(formatBoard([mk([CLAIM_ALPHA, DONE_ALPHA])], 'delta'))
+    assert.ok(
+      !freed.includes('alpha'),
+      `a holder-closed issue must not render its owner: ${freed}`,
+    )
+    // formatSync embeds this same call (src/coord/formatters.js: boardSection = formatBoard(...)),
+    // so one pin covers both verbs #12's box 4 asks about.
+  })
+
+  it('ownerOf and race.js agree on the reopen shape, and differ only where documented', () => {
+    // agreement: a bystander DONE disarms nobody in either notion - this is the case the two
+    // files used to disagree about by accident; now they disagree by construction nowhere.
+    const bystander = [CLAIM_ALPHA, DONE_BRAVO]
+    assert.equal(ownerOf(mk(bystander)), 'alpha')
+    assert.deepEqual(
+      liveClaims(bystander).map((c) => c.agent),
+      ['alpha'],
+      'liveClaims must still hold alpha after bravo closes it',
+    )
+    assert.equal(
+      evaluateClaimRace(bystander, 'delta').won,
+      false,
+      'delta must be refused a race',
+    )
+    assert.equal(evaluateClaimRace(bystander, 'delta').earlierAgent, 'alpha')
+
+    // agreement on the other side: the holder's own DONE frees them in BOTH notions (#800).
+    const selfClosed = [CLAIM_ALPHA, DONE_ALPHA]
+    assert.equal(ownerOf(mk(selfClosed)), '')
+    assert.deepEqual(liveClaims(selfClosed), [])
+    assert.equal(evaluateClaimRace(selfClosed, 'delta').won, true)
+
+    // the ONE documented divergence, pinned so it cannot be mistaken for drift: an unattributed
+    // close-out clears ownership but frees no race, because attribution is impossible.
+    const unattributed = [CLAIM_ALPHA, DONE_UNATTRIBUTED]
+    assert.equal(
+      ownerOf(mk(unattributed)),
+      '',
+      'ownerOf clears an unattributed close-out',
+    )
+    assert.deepEqual(
+      liveClaims(unattributed).map((c) => c.agent),
+      ['alpha'],
+      'race.js keeps the claim: it disarms per-agent and there is no agent to disarm',
+    )
+  })
+})
