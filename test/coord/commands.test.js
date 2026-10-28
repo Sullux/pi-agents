@@ -458,3 +458,158 @@ describe('coord hub stamps its own line (#29 guard 2)', () => {
     )
   })
 })
+
+// #34: pi-agents carries NO status:* labels (measured: `gh label list --json name` answers
+// bug/enhancement/coordinate only), so `page coord claim 34` wrote its **CLAIM** comment and
+// THEN died with `'status:unclaimed' not found`, exiting 1 on work it had already done. The
+// retry path is what makes that expensive: a caller that reads a nonzero exit as "not mine"
+// claims again, and three agents pile up duplicates of the same task (#238). Two half-bugs are
+// fixed here - gh refuses to REMOVE a label the issue does not carry (so removals are filtered
+// against the issue's own labels), and gh refuses to ADD a label the repo never created (which
+// cannot be pre-filtered without a repo-wide taxonomy read, deliberately avoided: a skipped add
+// would look like a board move that never happened). A residual failure is now returned as
+// `labelWarning`, never thrown, and the CLI prints it.
+describe('coord label mutation is best-effort (#34)', () => {
+  const GH_ERROR =
+    "failed to update https://github.com/Sullux/pi-agents/issues/34: 'status:unclaimed' not found\nfailed to update 1 issue"
+
+  const harness = ({
+    labels = [{ name: 'status:claimed' }, { name: 'bug' }],
+    fail = true,
+  } = {}) => {
+    const commented = []
+    const edited = []
+    const closed = []
+    const issue = {
+      number: 34,
+      body: '## Files\nsrc/foo.js\n\n## Goal\nTest',
+      labels,
+      comments: [],
+    }
+    const coord = CoordService({
+      github: {
+        viewIssue: async () => issue,
+        listIssues: async () => [issue],
+        commentIssue: async (num, body) => {
+          commented.push({ num, body })
+        },
+        editIssue: async (num, edits) => {
+          edited.push({ num, edits })
+          if (fail) {
+            const error = new Error(GH_ERROR)
+            error.stderr = GH_ERROR
+            throw error
+          }
+        },
+        closeIssue: async (num) => {
+          closed.push(num)
+        },
+      },
+      agent: 'delta',
+      human: 'Sullux',
+      now: () => 1700000000000,
+    })
+    return { coord, commented, edited, closed }
+  }
+
+  const verbs = [
+    [
+      'claim',
+      (coord) => coord.claim(34, { plan: 'p', eta: '10m' }),
+      '**CLAIM**',
+    ],
+    [
+      'release',
+      (coord) => coord.release(34, { reason: 'done for today' }),
+      '**RELEASE**',
+    ],
+    [
+      'review',
+      (coord) => coord.review(34, { pr: 33, text: 'verdict' }),
+      '**REVIEW**',
+    ],
+    [
+      'done',
+      (coord) => coord.done(34, { pr: 33, text: 'attested' }),
+      '**DONE**',
+    ],
+  ]
+
+  for (const [name, call, marker] of verbs) {
+    it(`${name} returns ok + a labelWarning instead of throwing after its comment lands`, async () => {
+      const { coord, commented, edited } = harness()
+      const res = await call(coord)
+      assert.equal(res.ok, true, `${name} recorded its protocol event`)
+      assert.ok(
+        commented[0].body.startsWith(marker),
+        `the ${marker} comment was written before gh refused`,
+      )
+      assert.equal(
+        edited.length,
+        1,
+        'the edit was ATTEMPTED - the warning is not a skip',
+      )
+      assert.ok(
+        res.labelWarning.includes("'status:unclaimed' not found"),
+        `gh's own sentence must survive, not a paraphrase: ${res.labelWarning}`,
+      )
+    })
+  }
+
+  it('done still closes the issue when the label edit fails', async () => {
+    const { coord, closed } = harness()
+    const res = await coord.done(34, { text: 'attested' })
+    assert.equal(res.ok, true)
+    assert.deepEqual(
+      closed,
+      [34],
+      'a failed decoration cannot skip the outcome',
+    )
+  })
+
+  it('does not ask gh to remove a label the issue does not carry', async () => {
+    const { coord, edited } = harness({ labels: [{ name: 'bug' }] })
+    await coord.claim(34, { plan: 'p' })
+    assert.equal(
+      edited[0].edits.removeLabels,
+      undefined,
+      'the fixed list was half of #34: gh refuses absent removals, so it must not be asked',
+    )
+    assert.deepEqual(edited[0].edits.addLabels, ['status:claimed'])
+  })
+
+  it('removes a status label the issue DOES carry - the filter is not a no-op', async () => {
+    const { coord, edited } = harness({
+      labels: [{ name: 'status:unclaimed' }, { name: 'p2' }],
+    })
+    await coord.claim(34, { plan: 'p' })
+    assert.deepEqual(
+      edited[0].edits.removeLabels,
+      ['status:unclaimed'],
+      'a present label must still be removed, or the board freezes claimed',
+    )
+  })
+
+  it('done with no status labels attempts no edit at all', async () => {
+    const { coord, edited, closed } = harness({
+      labels: [{ name: 'bug' }],
+      fail: false,
+    })
+    await coord.done(34, { text: 'attested' })
+    assert.deepEqual(edited, [], 'nothing to remove means no doomed gh call')
+    assert.deepEqual(closed, [34])
+  })
+
+  it('reports no warning when the edit succeeds - the warning is conditional', async () => {
+    const { coord } = harness({ fail: false })
+    for (const res of [
+      await coord.claim(34, { plan: 'p' }),
+      await coord.release(34),
+      await coord.review(34, { text: 'v' }),
+      await coord.done(34, { text: 'a' }),
+    ]) {
+      assert.equal(res.ok, true)
+      assert.equal(res.labelWarning, undefined)
+    }
+  })
+})

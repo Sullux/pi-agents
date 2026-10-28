@@ -1,6 +1,6 @@
 const { cleanAgent, ownerOf, isMine } = require('./owner')
 const { isIssueNumber } = require('./issueNumber')
-const { parseScope, checkScopeCollision } = require('./scope')
+const { parseScope, checkScopeCollision, labelNames } = require('./scope')
 const { evaluateClaimRace } = require('./race')
 const { formatBoard, formatSync } = require('./formatters')
 // #29 guard 2 lives with guard 1 in src/cli/hubText.js, which is where hub-text rules
@@ -64,6 +64,36 @@ const CoordService = ({
       'issue, given as a positive integer',
   })
 
+  // #34: the protocol comment IS the record; labels are decoration, and a repo can simply
+  // not have the taxonomy - pi-agents carries zero status:* labels, measured. Two gh refusals
+  // used to arrive as one throw AFTER the comment was written: gh will not REMOVE a label the
+  // issue does not carry, and will not ADD a label the repo never created. Every mutating verb
+  // therefore exited 1 on work it had already done, and the retry re-claimed an issue the agent
+  // already held - the #238 pileup shape, funded by a tool bug. Removals are now filtered against
+  // what the issue actually has, so most calls never fire, and a residual failure comes back as a
+  // warning instead of throwing. Swallowing it silently would be worse than the throw: an agent
+  // that believes labels moved reads a board that never changed, so the CLI has to print this.
+  const applyLabels = async (
+    number,
+    { addLabels = [], removeLabels = [], issue } = {},
+  ) => {
+    const present = labelNames(issue)
+    const removable = removeLabels.filter((name) => present.includes(name))
+    if (!addLabels.length && !removable.length) return {}
+    // only the keys with work behind them: `done` historically sent no addLabels at all, and
+    // a pin asserts that shape because an empty `--add-label` is exactly the doomed call this
+    // issue is about
+    const edits = {}
+    if (addLabels.length) edits.addLabels = addLabels
+    if (removable.length) edits.removeLabels = removable
+    try {
+      await github.editIssue(number, edits)
+      return {}
+    } catch (error) {
+      return { labelWarning: String(error?.message || error).trim() }
+    }
+  }
+
   const claim = async (number, { plan = '', eta = '' } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
     const issue = await github.viewIssue(number)
@@ -117,9 +147,10 @@ const CoordService = ({
       warningNote
 
     await github.commentIssue(number, commentBody)
-    await github.editIssue(number, {
+    const labels = await applyLabels(number, {
       addLabels: ['status:claimed'],
       removeLabels: ['status:unclaimed', 'status:blocked'],
+      issue,
     })
 
     const refreshed = await github.viewIssue(number)
@@ -133,18 +164,23 @@ const CoordService = ({
       }
     }
 
-    return { ok: true, number, warnings }
+    return { ok: true, number, warnings, ...labels }
   }
 
   const release = async (number, { reason = '' } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
     const commentBody = `**RELEASE** | agent: agent-${cleanCurrent} | reason: ${reason || 'unspecified'}`
     await github.commentIssue(number, commentBody)
-    await github.editIssue(number, {
+    // the view is only for the removal filter below - release used to hand gh a fixed list,
+    // which is the half of #34 that fires on a repo that DOES have the taxonomy but whose
+    // issue never passed through unclaimed
+    const issue = await github.viewIssue(number)
+    const labels = await applyLabels(number, {
       addLabels: ['status:unclaimed'],
       removeLabels: ['status:claimed', 'status:in-progress'],
+      issue,
     })
-    return { ok: true, number }
+    return { ok: true, number, ...labels }
   }
 
   const status = async (number, message = '') => {
@@ -162,16 +198,14 @@ const CoordService = ({
       (text ? `\n\n${text}` : '')
     await github.commentIssue(number, commentBody)
     const issue = await github.viewIssue(number)
-    const existingStatusLabels = (issue?.labels || [])
-      .map((l) => (typeof l === 'string' ? l : l.name))
-      .filter(
-        (name) => name.startsWith('status:') && name !== 'status:in-review',
-      )
-    await github.editIssue(number, {
+    const labels = await applyLabels(number, {
       addLabels: ['status:in-review'],
-      removeLabels: existingStatusLabels,
+      removeLabels: labelNames(issue).filter(
+        (name) => name?.startsWith('status:') && name !== 'status:in-review',
+      ),
+      issue,
     })
-    return { ok: true, number }
+    return { ok: true, number, ...labels }
   }
 
   const done = async (number, { pr = '', text = '' } = {}) => {
@@ -182,18 +216,19 @@ const CoordService = ({
       (text ? `\n\n${text}` : '')
     await github.commentIssue(number, commentBody)
     const issue = await github.viewIssue(number)
-    const existingStatusLabels = (issue?.labels || [])
-      .map((l) => (typeof l === 'string' ? l : l.name))
-      .filter((name) => name.startsWith('status:'))
-    if (existingStatusLabels.length) {
-      await github.editIssue(number, {
-        removeLabels: existingStatusLabels,
-      })
-    }
+    const labels = await applyLabels(number, {
+      removeLabels: labelNames(issue).filter((name) =>
+        name?.startsWith('status:'),
+      ),
+      issue,
+    })
+    // close is NOT part of the best-effort step: it is the outcome `done` exists to produce,
+    // and #34 measured it succeeding on pi-agents while the label edit threw. A failed label
+    // edit must never skip it, and a failed close must still throw loudly.
     if (github.closeIssue) {
       await github.closeIssue(number)
     }
-    return { ok: true, number }
+    return { ok: true, number, ...labels }
   }
 
   const hub = async (text = '') => {

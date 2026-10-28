@@ -481,6 +481,17 @@ const Cli = ({
         stderr(bad.error)
         return true
       }
+      // #34: the label edit is best-effort now, so the PARTIAL state has to be loud or it reads
+      // as a full success. Printed as its own `  ! ` line on stdout - the same shape as the claim
+      // overlap warning below, and AFTER the success line, because repo-resolution.test.js pins
+      // those lines byte-for-byte. It carries gh's own sentence, not a paraphrase: the exact text
+      // is what tells an operator to either create the label or stop expecting the board to move.
+      const reportLabels = (res) => {
+        if (!res.labelWarning) return
+        stdout(
+          `  ! labels unchanged: ${res.labelWarning} - the protocol comment on this issue is the record`,
+        )
+      }
       if (sub === 'claim') {
         const num = requireIssueNumber('claim', positionals[1])
         if (failed(num)) return 1
@@ -493,6 +504,7 @@ const Cli = ({
           return 1
         }
         stdout(`Claimed #${num.value} @${target}`)
+        reportLabels(res)
         // #863: an in-review overlap warns rather than fences. Printing it here is what makes the
         // warning real - the claim still succeeded, so the agent needs to be told a rebase is owed.
         for (const w of res.warnings || []) {
@@ -514,6 +526,7 @@ const Cli = ({
           return 1
         }
         stdout(`Released #${num.value} @${target}`)
+        reportLabels(res)
         return 0
       }
       if (sub === 'status') {
@@ -541,6 +554,7 @@ const Cli = ({
           return 1
         }
         stdout(`Moved #${num.value} to in-review @${target}`)
+        reportLabels(res)
         return 0
       }
       if (sub === 'done') {
@@ -560,6 +574,7 @@ const Cli = ({
           return 1
         }
         stdout(`Marked #${num.value} done @${target}`)
+        reportLabels(res)
         // A SECOND line, never an appended clause: repo-resolution.test.js asserts the
         // success line byte-for-byte for every mutating verb, and #23 chose the
         // end-of-line suffix shape precisely so three unrelated pins would not have to
