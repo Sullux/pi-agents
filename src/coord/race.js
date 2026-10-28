@@ -1,4 +1,4 @@
-const { cleanAgent } = require('./owner')
+const { cleanAgent, markerOf, agentOf } = require('./owner')
 
 // A claim is LIVE only until the same agent RELEASEs, DONEs or HANDOFFs it.
 // Without that, the earliest **CLAIM** in an issue's whole history wins forever
@@ -10,17 +10,20 @@ const { cleanAgent } = require('./owner')
 // its own coordination tool, and ownerOf() (which IS release-aware) disagreed
 // with this function, so the pre-claim check said "free" and the post-claim
 // check contradicted it.
+// pi-agents#12 asks whether this list should still contain DONE now that ownerOf treats a
+// close-out as the POSTER's own act. It should, and the two notions are now consistent rather
+// than merely different: liveClaims disarms per-agent (`live.delete(entry.agent)`), so a DONE
+// signed by a bystander never frees the holder - which is exactly what ownerOf does. What each
+// function answers is different ("who still holds this?" vs "whose claim can win a race?"), but
+// neither lets a third party sign someone else's release.
 const TERMINATING_MARKERS = ['RELEASE', 'DONE', 'HANDOFF']
 
-const markerOf = (body = '') => {
-  const match = body.trim().match(/^\*\*([A-Z]+)\*\*/)
-  return match ? match[1] : ''
-}
-
-const agentOf = (body = '') => {
-  const match = body.match(/\|\s*agent:\s*([^|\n]+)/)
-  return match ? cleanAgent(match[1]) : ''
-}
+// ONE deliberate divergence remains, and it is the unattributed marker: a RELEASE/DONE line
+// that names no `agent:` clears ownership in ownerOf (we cannot attribute it, so we treat it as
+// the last word written on the issue - the behavior every existing pin depends on), while here
+// it disarms NOBODY (`live.delete('')` is a no-op), so a race is still refused. Divergence is
+// safe in that direction: the gate is the loud one and the fence is the quiet one. Coord's own
+// verbs always sign their protocol lines with `| agent:`, so the case is a hand-written comment.
 
 // Rule C ordering: earliest timestamp wins, same-second ties fall to comment-id order.
 const byArrival = (a, b) => a.at - b.at || a.id.localeCompare(b.id)
@@ -28,6 +31,8 @@ const byArrival = (a, b) => a.at - b.at || a.id.localeCompare(b.id)
 const protocolTimeline = (comments = []) =>
   comments
     .map((c) => ({
+      // `id` participates in same-second tie-breaking (Rule C), so a caller that omits ids
+      // still gets a deterministic order - String(undefined ?? '') is '' for all of them.
       id: String(c.id ?? ''),
       at: new Date(c.createdAt).getTime(),
       kind: markerOf(c.body),
