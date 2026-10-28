@@ -3,18 +3,10 @@ const { waitInterruptible } = require('./countdown')
 const { runPiSession } = require('./session')
 const { SessionTracker } = require('./sessionTracker')
 
-const resolveCyclePrompt = (availability, steering) => {
-  const prompts = {
-    unclaimed_tasks:
-      'Actionable unclaimed tasks are available on the coordination board. Check `page coord board`, claim a task, and begin development using the coordinate skill.',
-    open_prs:
-      'Open pull requests are awaiting peer review. Review open peer PRs, verify test suites, and post review verdicts using the coordinate skill.',
-    owned_claims:
-      'Continue active development on your claimed task using the coordinate skill.',
-  }
-  const base =
-    prompts[availability?.reason] ||
-    'Proceed with development using the coordinate skill.'
+const resolveCyclePrompt = ({ isNewTask = false, steering = '' } = {}) => {
+  const base = isNewTask
+    ? 'Proceed with development using the coordinate skill (finish any in-progress work, or check the board and PRs if ready for a new task).'
+    : 'Continue development using the coordinate skill.'
   return steering ? `${base} Explicit steering from user: ${steering}` : base
 }
 
@@ -77,7 +69,7 @@ const Runner = ({
         if (sessionTracker) sessionTracker.updateStatus(agent, 'running')
         await sessionImpl({
           targetPath,
-          prompt: resolveCyclePrompt(availability, steering),
+          prompt: resolveCyclePrompt({ isNewTask, steering }),
           continueSession: !isNewTask,
           model,
           thinking,
