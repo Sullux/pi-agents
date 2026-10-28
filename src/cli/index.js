@@ -8,6 +8,7 @@ const { CoordService } = require('../coord')
 const { Runner, SessionTracker } = require('../runner')
 const { pad } = require('../coord/formatters')
 const { requireIssueNumber, requireMessage } = require('../coord/issueNumber')
+const { Provenance } = require('./selfcheck')
 
 const printHelp = () => {
   console.log(`
@@ -48,6 +49,7 @@ Coordination Commands:
   coord done <issue> [--pr <n>]      Mark issue completed
   coord hub <text>                   Post update to coordination hub
   coord hub --body-file <path>       Post update from a markdown file
+  coord provenance                   Report which checkout and commit are running
 
 System Commands:
   env show <agent> <project>         Show resolved environment variables
@@ -68,6 +70,7 @@ const Cli = ({
   configLoader: customLoader,
   sessionTracker: customTracker,
   coordFactory: customCoord,
+  provenance = Provenance(),
   stdout = console.log,
   stderr = console.error,
 } = {}) => {
@@ -401,6 +404,21 @@ const Cli = ({
 
     if (command === 'coord') {
       const sub = positionals[0]
+      // #18: this checkout IS the installed program, so an agent's verdict is only as trustworthy as
+      // the tree the shim happened to exec. `provenance` is the on-demand readout, and for that verb
+      // describe() below is the whole answer, so the advisory is not doubled.
+      if (sub === 'provenance') {
+        stdout(provenance.describe())
+        return 0
+      }
+      // ADVISORY ONLY: stderr, never stdout (agents grep the board), and it changes no exit code.
+      // Best-effort by design: a subordinate diagnostic that throws would take down the very command
+      // it exists to report on, which is the #18 outage all over again. The `provenance` verb above
+      // is deliberately NOT guarded - there the readout IS the command, so a failure must be loud.
+      try {
+        const advisory = provenance.note()
+        if (advisory) stderr(advisory)
+      } catch {}
       const repo = flags.repo || ''
       const github = GitHubClient({ repo })
       const agent = process.env.COORD_AGENT || 'agent-cli'
