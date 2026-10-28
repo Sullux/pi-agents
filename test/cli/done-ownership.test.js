@@ -10,14 +10,18 @@ const { Cli } = require('../../src/cli')
 const { CoordService } = require('../../src/coord')
 const { USAGE } = require('../../src/coord/issueNumber')
 
-// The CLAIM comment is built from the agent the CLI itself resolved, so the double cannot go red on
-// a machine whose profile folds to a different name.
+// The CLAIM comment is built from the SAME identity the service is constructed with, never from
+// the agent the CLI resolved out of the ambient COORD_AGENT. The first version interpolated
+// `resolved`, which made "the caller holds this issue" a property of whoever ran the suite
+// (agent-echo's #43 review: 5/5 under agent-Delta, 4/5 under agent-Echo, agent-Bravo, and CI with
+// no COORD_AGENT at all). The last arm in this file pins that seam, so the dependency cannot creep
+// back in through a fixture that looks self-contained.
 const world = ({ comments, onWrite, agent = 'agent-delta' }) => {
   const out = []
   const err = []
   const cli = Cli({
     github: { repo: 'Sullux/pi-agents' },
-    coordFactory: ({ agent: resolved }) =>
+    coordFactory: () =>
       CoordService({
         github: {
           viewIssue: async (number) => ({
@@ -26,7 +30,7 @@ const world = ({ comments, onWrite, agent = 'agent-delta' }) => {
             body: '## Files\nsrc/x.js',
             labels: [{ name: 'status:claimed' }],
             comments: comments ?? [
-              { body: `**CLAIM** | agent: ${resolved} | at: 1700000000000` },
+              { body: `**CLAIM** | agent: ${agent} | at: 1700000000000` },
             ],
           }),
           listIssues: async () => [],
@@ -101,6 +105,8 @@ test('a refusal exits nonzero, names the reason, and writes nothing', async () =
   const h = world({ comments: echoHoldsIt, onWrite: (w) => writes.push(w) })
   const status = await h.run(['coord', 'done', '21', 'my work is finished'])
   assert.notEqual(status, 0, 'box 1: the CLI exits nonzero on a refusal')
+  // multi-line on purpose: a one-line grep of `deepEqual(writes` reports a false absence here
+  // (agent-echo tripped on exactly that while auditing this arm)
   assert.deepEqual(
     writes,
     [],
@@ -192,4 +198,25 @@ test('a routine self-close stays one line, and success keeps its shape', async (
     0,
     'no note when nothing was bypassed, or the warning becomes wallpaper',
   )
+})
+
+test('the double does not read the ambient COORD_AGENT (the #43 review blocker, pinned)', async () => {
+  // a foreign identity in the environment must not be able to redden a self-owned close-out - that
+  // is what made the first version of this file pass for one agent and fail for the rest of the fleet
+  const previous = process.env.COORD_AGENT
+  const writes = []
+  try {
+    process.env.COORD_AGENT = 'agent-somebody-else'
+    const h = world({ onWrite: (w) => writes.push(w) })
+    const status = await h.run(['coord', 'done', '21', 'attested'])
+    assert.equal(
+      status,
+      0,
+      `the close must not depend on the ambient identity: ${h.err.join(' | ')}`,
+    )
+    assert.deepEqual(writes, ['comment', 'edit', 'close'])
+  } finally {
+    if (previous === undefined) delete process.env.COORD_AGENT
+    else process.env.COORD_AGENT = previous
+  }
 })
