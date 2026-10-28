@@ -7,6 +7,7 @@ const { GitHubClient } = require('../github')
 const { CoordService } = require('../coord')
 const { Runner, SessionTracker } = require('../runner')
 const { pad } = require('../coord/formatters')
+const { requireIssueNumber, requireMessage } = require('../coord/issueNumber')
 
 const printHelp = () => {
   console.log(`
@@ -432,9 +433,20 @@ const Cli = ({
         stdout(`Posted to hub #${posted.hubNumber}`)
         return 0
       }
+      // Every mutating verb below addresses one issue, and a missing positional
+      // used to become `Number(undefined)` = NaN and reach a real `gh` write
+      // against issue "NaN" (pi-agents#13). `failed` prints the first validation
+      // error so all five refuse in exactly one shape.
+      const failed = (...steps) => {
+        const bad = steps.find((step) => step && step.error)
+        if (!bad) return false
+        stderr(bad.error)
+        return true
+      }
       if (sub === 'claim') {
-        const issueNum = Number(positionals[1])
-        const res = await coord.claim(issueNum, {
+        const num = requireIssueNumber('claim', positionals[1])
+        if (failed(num)) return 1
+        const res = await coord.claim(num.value, {
           plan: flags.plan,
           eta: flags.eta,
         })
@@ -442,7 +454,7 @@ const Cli = ({
           stderr(`Error: ${res.error}`)
           return 1
         }
-        stdout(`Claimed #${issueNum}`)
+        stdout(`Claimed #${num.value}`)
         // #863: an in-review overlap warns rather than fences. Printing it here is what makes the
         // warning real - the claim still succeeded, so the agent needs to be told a rebase is owed.
         for (const w of res.warnings || []) {
@@ -453,29 +465,52 @@ const Cli = ({
         return 0
       }
       if (sub === 'release') {
-        const issueNum = Number(positionals[1])
-        const res = await coord.release(issueNum, { reason: flags.reason })
-        stdout(`Released #${issueNum}`)
+        const num = requireIssueNumber('release', positionals[1])
+        if (failed(num)) return 1
+        const res = await coord.release(num.value, { reason: flags.reason })
+        // The four verbs below used to print success without reading `res`, so a
+        // service-level refusal (including the #13 guard) stayed invisible. The
+        // success line is what made a failed write look like a completed one.
+        if (!res.ok) {
+          stderr(`Error: ${res.error}`)
+          return 1
+        }
+        stdout(`Released #${num.value}`)
         return 0
       }
       if (sub === 'status') {
-        const issueNum = Number(positionals[1])
-        const msg = positionals.slice(2).join(' ')
-        await coord.status(issueNum, msg)
-        stdout(`Status updated on #${issueNum}`)
+        const num = requireIssueNumber('status', positionals[1])
+        const msg = requireMessage('status', positionals.slice(2).join(' '))
+        if (failed(num, msg)) return 1
+        const res = await coord.status(num.value, msg.value)
+        if (!res.ok) {
+          stderr(`Error: ${res.error}`)
+          return 1
+        }
+        stdout(`Status updated on #${num.value}`)
         return 0
       }
       if (sub === 'review') {
-        const issueNum = Number(positionals[1])
-        const msg = positionals.slice(2).join(' ')
-        await coord.review(issueNum, { pr: flags.pr, text: msg })
-        stdout(`Moved #${issueNum} to in-review`)
+        const num = requireIssueNumber('review', positionals[1])
+        const msg = requireMessage('review', positionals.slice(2).join(' '))
+        if (failed(num, msg)) return 1
+        const res = await coord.review(num.value, { pr: flags.pr, text: msg.value })
+        if (!res.ok) {
+          stderr(`Error: ${res.error}`)
+          return 1
+        }
+        stdout(`Moved #${num.value} to in-review`)
         return 0
       }
       if (sub === 'done') {
-        const issueNum = Number(positionals[1])
-        await coord.done(issueNum, { pr: flags.pr })
-        stdout(`Marked #${issueNum} done`)
+        const num = requireIssueNumber('done', positionals[1])
+        if (failed(num)) return 1
+        const res = await coord.done(num.value, { pr: flags.pr })
+        if (!res.ok) {
+          stderr(`Error: ${res.error}`)
+          return 1
+        }
+        stdout(`Marked #${num.value} done`)
         return 0
       }
     }
