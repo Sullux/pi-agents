@@ -35,12 +35,23 @@ const PLACEHOLDER_FORMS = [
 // refusing - found by test/cli/hubText.test.js's slot-shape arm, not by reading.
 const LEADING_PROSE_RE = /^\W{0,3}(TODO|FIXME)\b/i
 
+// #35: the refusal names the FORM and now echoes the MATCH. Before this, `page coord hub
+// "delta: posted at 17:1xZ (patched)"` answered `an unreplaced time token` and left the author
+// to guess which substring tripped - while the same message already tells them to wrap a quoted
+// token in backticks, so the echo turns a guess into one keystroke. The form string stays a
+// substring of the returned value because the existing arms assert `includes(<form>)`.
+// The leading-prose branch echoes too, which said only "a leading TODO".
 const findPlaceholder = (text) => {
   const firstLine = String(text).split('\n')[0].replace(CODE_SPAN_RE, '')
   const hit = PLACEHOLDER_FORMS.find(([, re]) => re.test(firstLine))
-  if (hit) return hit[0]
+  if (hit) {
+    const [form, re] = hit
+    return `${form} (\`${re.exec(firstLine)[0]}\`)`
+  }
   const lead = LEADING_PROSE_RE.exec(firstLine)
-  return lead ? `a leading ${lead[1].toUpperCase()}` : ''
+  return lead
+    ? `a leading ${lead[1].toUpperCase()} (\`${lead[0].trim()}\`)`
+    : ''
 }
 
 // #29 guard 2: the hub line cannot exit without a valid stamp, so an author never
@@ -51,7 +62,7 @@ const findPlaceholder = (text) => {
 // consumed because hub() composes the marker before stamping, and the stamp belongs on
 // the message line, not above the protocol marker.
 const SYNC_HEAD_RE = /^(?:\*\*SYNC\*\*[^\n]*\n\n)?/
-const LEADING_STAMP_RE = /^(\d{2}):(\d{2})(?::(\d{2}))?Z(?=$|\s)/
+const LEADING_STAMP_RE = /^(\d{1,2}):(\d{2})(?::(\d{2}))?Z(?=$|\s)/
 
 const stampOfUtc = (now) => new Date(now()).toISOString().slice(11, 16) + 'Z'
 
@@ -100,7 +111,13 @@ const HubText =
         error:
           `hub text carries ${placeholder} on its first line - a token no clock was ` +
           'ever read from. Read one with: date -u +%H:%MZ, or wrap a QUOTED token in ' +
-          `backticks to post it as prose.\n${HUB_USAGE}`,
+          `backticks to post it as prose.\n${HUB_USAGE}` +
+          // #35: the scan is first-line-only by design (a body beginning with a protocol
+          // marker carries its unread token deeper, and widening the scan is what produced
+          // seven false accusations in #33's review). Saying so is the difference between a
+          // guard and a silence: an agent whose multi-line body passes reads the green as
+          // coverage. This sentence is the coverage claim, not a hedge.
+          '\n\nScope: only the FIRST line is inspected, so a token deeper in a multi-line body is deliberately not checked.',
       }
     return { text }
   }
