@@ -210,6 +210,11 @@ describe('Coordination Protocol: Service Methods', () => {
       viewIssue: async (num) => ({
         number: num,
         labels: [{ name: 'status:in-review' }, { name: 'p1' }],
+        // #28: `done` now refuses unless the caller holds the claim, so this fixture has to
+        // carry alpha's CLAIM - completing the double, not loosening the guard
+        comments: [
+          { body: '**CLAIM** | agent: agent-alpha | at: 1700000000000' },
+        ],
       }),
       commentIssue: async (num, body) => {
         commented.push({ num, body })
@@ -484,7 +489,12 @@ describe('coord label mutation is best-effort (#34)', () => {
       number: 34,
       body: '## Files\nsrc/foo.js\n\n## Goal\nTest',
       labels,
-      comments: [],
+      // #28: the caller must hold the issue for `done` to proceed, so the shared fixture carries
+      // delta's own CLAIM. `claim` is unaffected (a self-claim is still claimable), and the race
+      // check resolves to a win for the same reason.
+      comments: [
+        { body: '**CLAIM** | agent: agent-delta | at: 1700000000000' },
+      ],
     }
     const coord = CoordService({
       github: {
@@ -630,5 +640,248 @@ describe('coord label mutation is best-effort (#34)', () => {
       assert.equal(res.ok, true)
       assert.equal(res.labelWarning, undefined)
     }
+  })
+})
+
+describe('#28 done refuses to close an issue the caller does not hold', () => {
+  // A recorder harness, because box 5 is about what did NOT happen: pitcairn #1104's damage was
+  // the three writes that landed before anyone asked who owned the issue, so a returned error
+  // string alone is only half the fix. `writes` sees comment / edit / close and nothing else.
+  const world = ({
+    agent,
+    comments = [],
+    labels = [{ name: 'status:claimed' }],
+  }) => {
+    const writes = []
+    const github = {
+      viewIssue: async () => ({
+        number: 700,
+        title: '#28 fixture',
+        body: '## Files\nsrc/x.js',
+        labels,
+        comments,
+      }),
+      listIssues: async () => [],
+      commentIssue: async () => {
+        writes.push('comment')
+        return { html_url: 'https://example.test/c' }
+      },
+      editIssue: async () => {
+        writes.push('edit')
+        return {}
+      },
+      closeIssue: async () => {
+        writes.push('close')
+        return {}
+      },
+    }
+    return { coord: CoordService({ github, agent }), writes }
+  }
+
+  const claim = (agent, at = 1700000000000) => ({
+    body: `**CLAIM** | agent: ${agent} | at: ${at}`,
+    createdAt: new Date(at).toISOString(),
+  })
+  const marker = (body, at = '2023-11-15T00:05:00.000Z') => ({
+    body,
+    createdAt: at,
+  })
+
+  // every timeline below carries both its expected verdict and the side-effect floor, so a guard
+  // that returns the right string but keeps writing cannot pass
+  const cases = [
+    {
+      name: 'my CLAIM, I am the owner: allowed, and all three writes land',
+      comments: [claim('agent-delta')],
+      expect: { ok: true, writes: ['comment', 'edit', 'close'] },
+    },
+    {
+      name: 'a peer CLAIM on an open issue: refused, ZERO writes (pitcairn #1104, 11 minutes in)',
+      comments: [claim('agent-echo')],
+      expect: {
+        ok: false,
+        writes: [],
+        namesOwner: /held by agent-echo/,
+        namesTime: /CLAIM\*\* at 2023-11-14T22:13:20\.000Z/,
+      },
+    },
+    {
+      name: 'I released, then another agent claimed: refused, ZERO writes',
+      comments: [
+        claim('agent-delta', 1600000000000),
+        marker('**RELEASE** | agent: agent-delta | at: 1600000001000'),
+        claim('agent-foxtrot', 1700000000000),
+      ],
+      expect: { ok: false, writes: [], namesOwner: /held by agent-foxtrot/ },
+    },
+    {
+      name: "another agent's DONE closed out MY claim: still mine to close (unheld + my CLAIM)",
+      comments: [
+        claim('agent-delta'),
+        marker('**DONE** | agent: agent-echo | pr: #701 | at: 1700000009999'),
+      ],
+      expect: { ok: true, writes: ['comment', 'edit', 'close'] },
+    },
+    {
+      name: 'no CLAIM at all: refused - "no owner" is not evidence that it is mine',
+      comments: [marker('just a status update, no protocol marker')],
+      expect: {
+        ok: false,
+        writes: [],
+        namesGuard: /unheld and carries no \*\*CLAIM\*\* by agent-delta/,
+      },
+    },
+    {
+      // deliberate, and pinned so it cannot be mistaken for a hole: box 2 refuses when the issue
+      // "carries no claim by the caller". This one DOES - it was handed back and nobody took it,
+      // so the board is genuinely free and there is no in-flight peer to step on. Refusing here
+      // would need a second fold of my own markers, i.e. a second definition of the protocol
+      // beside ownerOf's, and that drift risk is worse than the gap it closes.
+      name: 'I released and nobody re-claimed: allowed - unheld, but my CLAIM is on the record',
+      comments: [
+        claim('agent-delta', 1600000000000),
+        marker('**RELEASE** | agent: agent-delta | at: 1600000001000'),
+      ],
+      expect: { ok: true, writes: ['comment', 'edit', 'close'] },
+    },
+    {
+      name: 'I re-claimed after releasing: allowed again, the fold is order-sensitive',
+      comments: [
+        claim('agent-delta', 1600000000000),
+        marker('**RELEASE** | agent: agent-delta | at: 1600000001000'),
+        claim('agent-delta', 1700000000000),
+      ],
+      expect: { ok: true, writes: ['comment', 'edit', 'close'] },
+    },
+  ]
+
+  for (const { name, comments, expect } of cases) {
+    it(name, async () => {
+      const { coord, writes } = world({ agent: 'agent-delta', comments })
+      const res = await coord.done(700, { text: 'attested' })
+      assert.equal(res.ok, expect.ok, `${name} - verdict (got: ${res.error})`)
+      assert.deepEqual(writes, expect.writes, `${name} - side effects`)
+      if (!expect.ok) {
+        assert.match(res.error, expect.namesOwner || /./, 'owner naming')
+        assert.match(res.error, expect.namesTime || /at /, 'names a time')
+        assert.match(
+          res.error,
+          expect.namesGuard || /Claim it/,
+          'names the way through',
+        )
+        assert.match(
+          res.error,
+          /--force/,
+          'a refusal must point at the override, or the next agent invents one',
+        )
+      }
+    })
+  }
+
+  it('--force closes a peer-held issue and reports that it was forced', async () => {
+    const { coord, writes } = world({
+      agent: 'agent-delta',
+      comments: [claim('agent-echo')],
+    })
+    const res = await coord.done(700, { text: 'supervisor sweep', force: true })
+    assert.equal(res.ok, true, 'the override is honored')
+    assert.deepEqual(
+      writes,
+      ['comment', 'edit', 'close'],
+      'and it really did the work',
+    )
+    assert.equal(res.forced, true, 'forced must be reported, not kept private')
+    assert.equal(
+      res.owner,
+      'echo',
+      'the record names whose claim was stepped on',
+    )
+  })
+
+  it('a self-owned close reports forced: false, so the note cannot become noise', async () => {
+    const { coord } = world({
+      agent: 'agent-delta',
+      comments: [claim('agent-delta')],
+    })
+    const res = await coord.done(700, { text: 'routine' })
+    assert.equal(res.forced, false)
+    assert.equal(res.owner, 'delta')
+  })
+
+  it('a CLAIM with no parseable timestamp refuses without throwing', async () => {
+    // new Date(NaN).toISOString() RangeErrors, and a guard that crashes on a thin mock is a
+    // failure path wearing a success path - the fleet would read it as a gh outage
+    const { coord, writes } = world({
+      agent: 'agent-delta',
+      comments: [{ body: '**CLAIM** | agent: agent-echo | at: not-a-time' }],
+    })
+    const res = await coord.done(700, { text: 'x' })
+    assert.equal(res.ok, false)
+    assert.match(res.error, /held by agent-echo/)
+    assert.match(res.error, /time unknown/)
+    assert.deepEqual(writes, [])
+  })
+
+  it('the identity comparison is cleanAgent-normalized, not string-equal', async () => {
+    // measured: the CLI passes "agent-Delta" while the protocol line reads "agent-delta" and a
+    // profile can read "pi/delta" - a raw === would refuse your OWN issue on one of the three
+    const variants = ['agent-delta', 'delta', 'pi/delta', 'Agent-Delta']
+    for (const agent of variants) {
+      const { coord, writes } = world({
+        agent,
+        comments: [claim('agent-delta')],
+      })
+      const res = await coord.done(700, { text: 'x' })
+      assert.equal(res.ok, true, `${agent} must resolve to the same holder`)
+      assert.deepEqual(writes, ['comment', 'edit', 'close'])
+    }
+  })
+
+  it('review keeps NO ownership check, and that asymmetry is pinned on purpose (#28)', async () => {
+    // A verdict is supposed to come from someone other than the holder, so `done` destroying a
+    // peer's board state and `review` publishing a verdict are different in kind. This arm exists
+    // so a future "consistency" pass cannot quietly add a guard that breaks the review gate.
+    const { coord, writes } = world({
+      agent: 'agent-delta',
+      comments: [claim('agent-echo')],
+    })
+    const res = await coord.review(700, { pr: '9', text: 'APPROVE' })
+    assert.equal(res.ok, true, 'a non-owner may still review')
+    assert.deepEqual(writes, ['comment', 'edit'])
+  })
+})
+
+describe("#28 hasClaimBy shares ownerOf's parser, so the token shape cannot drift", () => {
+  const { hasClaimBy } = require('../../src/coord/owner')
+
+  it('a line-initial CLAIM by the caller counts, and a prose mention does not', async () => {
+    assert.equal(
+      hasClaimBy(
+        [{ body: '**CLAIM** | agent: agent-delta | at: 1' }],
+        'pi/delta',
+      ),
+      true,
+      'the real shape must be recognized',
+    )
+    assert.equal(
+      hasClaimBy([{ body: 'I said **CLAIM** in a sentence' }], 'delta'),
+      false,
+      'PROTOCOL_REGEX is line-anchored, and so must this be',
+    )
+    assert.equal(
+      hasClaimBy([{ body: '**CLAIM** | agent: agent-echo | at: 1' }], 'delta'),
+      false,
+      'someone else claim is not my claim',
+    )
+    assert.equal(
+      hasClaimBy([], 'delta'),
+      false,
+      'an empty timeline claims nothing',
+    )
+    assert.equal(
+      hasClaimBy([{ body: '**CLAIM**' }], ''),
+      false,
+      'an empty agent claims nothing',
+    )
   })
 })

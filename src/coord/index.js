@@ -1,7 +1,7 @@
-const { cleanAgent, ownerOf, isMine } = require('./owner')
+const { cleanAgent, ownerOf, isMine, hasClaimBy } = require('./owner')
 const { isIssueNumber } = require('./issueNumber')
 const { parseScope, checkScopeCollision, labelNames } = require('./scope')
-const { evaluateClaimRace } = require('./race')
+const { evaluateClaimRace, liveClaims } = require('./race')
 const { formatBoard, formatSync } = require('./formatters')
 // #29 guard 2 lives with guard 1 in src/cli/hubText.js, which is where hub-text rules
 // are composed, and that module requires nothing - so this edge cannot form a cycle.
@@ -197,6 +197,12 @@ const CoordService = ({
     return { ok: true, number }
   }
 
+  // #28: `review` deliberately has NO ownership check, and that is documented rather than
+  // accidental. A verdict is supposed to come from someone other than the holder - the whole
+  // point of the review gate is a second pair of eyes - so `ownerOf === self` is not a
+  // precondition here. `done` below is different in kind: it DESTROYS the board state another
+  // agent is working against (closes the issue and strips its status label), which is why it
+  // refuses by default. Anyone tempted to "fix" the asymmetry should read that sentence first.
   const review = async (number, { pr = '', text = '' } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
     const commentBody =
@@ -215,14 +221,47 @@ const CoordService = ({
     return { ok: true, number, ...labels }
   }
 
-  const done = async (number, { pr = '', text = '' } = {}) => {
+  const done = async (number, { pr = '', text = '', force = false } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
+    // #28: the read moved ABOVE the write. `done` used to post its **DONE** comment, strip
+    // `status:*`, and close without asking who held the issue - measured on pitcairn #1104, where
+    // a bystander closed a peer's 11-minute-old live claim and the tool reported success the whole
+    // way, which is the #238 duplicate-PR mechanism with the board as the weapon. A refusal that
+    // has already commented is not a refusal, so ordering is part of the fix and the arms below
+    // assert zero side effects rather than just the returned error.
+    const issue = await github.viewIssue(number)
+    if (!issue) return { ok: false, error: `Issue #${number} not found` }
+
+    const owner = cleanAgent(ownerOf(issue))
+    // two states permit a close without the override: you hold it now, or nobody holds it and you
+    // signed its CLAIM at some point. Everything else is someone else's work or unowned work you
+    // never picked up, and both were measured happening on pitcairn #1104.
+    const allowed =
+      owner === cleanCurrent ||
+      (owner === '' && hasClaimBy(issue.comments, cleanCurrent))
+    if (!allowed && !force) {
+      const claim = liveClaims(issue.comments || []).find(
+        (c) => c.agent === owner,
+      )
+      // `at` comes from a comment timestamp a mock caller may omit, and new Date(NaN)
+      // .toISOString() throws - a refusal that crashes is a failure path wearing a guard
+      const when =
+        claim && Number.isFinite(claim.at)
+          ? new Date(claim.at).toISOString()
+          : 'time unknown'
+      return {
+        ok: false,
+        error: owner
+          ? `#${number} is held by agent-${owner} (their **CLAIM** at ${when}) - done closes their work and strips their label, so the board reads free while they are still typing. Claim it, or pass --force if you are a supervisor clearing stale work.`
+          : `#${number} is unheld and carries no **CLAIM** by agent-${cleanCurrent}, and 'no owner' is not evidence that it is yours - pitcairn #1104 was exactly a first-person DONE on work the caller had never claimed. Claim it first, or pass --force.`,
+      }
+    }
+
     const commentBody =
       `**DONE** | agent: agent-${cleanCurrent} | at: ${now()}` +
       (pr ? ` | pr: #${pr}` : '') +
       (text ? `\n\n${text}` : '')
     await github.commentIssue(number, commentBody)
-    const issue = await github.viewIssue(number)
     const labels = await applyLabels(number, {
       removeLabels: labelNames(issue).filter((name) =>
         name?.startsWith('status:'),
@@ -235,7 +274,15 @@ const CoordService = ({
     if (github.closeIssue) {
       await github.closeIssue(number)
     }
-    return { ok: true, number, ...labels }
+    return {
+      ok: true,
+      number,
+      ...labels,
+      owner,
+      // which path was taken is part of the record, not a private boolean: a forced close on a
+      // peer's issue is the event an auditor looks for afterwards
+      forced: force && !allowed,
+    }
   }
 
   const hub = async (text = '') => {

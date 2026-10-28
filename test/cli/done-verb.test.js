@@ -35,7 +35,15 @@ describe('page coord done carries its message (#31)', () => {
             viewIssue: async () => ({
               number: 21,
               labels: [{ name: 'status:claimed' }],
-              comments: [],
+              // #28: `done` refuses unless the caller holds the claim, so the double carries
+              // this agent's own CLAIM - built from the identity the CLI resolved, not a literal,
+              // so the fixture cannot go red on a machine whose profile name differs
+              comments: [
+                {
+                  body: `**CLAIM** | agent: ${agent} | at: 1700000000000`,
+                  createdAt: '2023-11-15T00:00:00.000Z',
+                },
+              ],
               body: '',
             }),
             editIssue: async (num, edits) => edited.push({ num, edits }),

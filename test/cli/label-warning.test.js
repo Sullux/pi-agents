@@ -25,6 +25,8 @@ const harness = ({ sub, extra = [], fail = true, labels } = {}) => {
     number: 34,
     body: '## Files\nsrc/foo.js\n\n## Goal\nTest',
     labels: labels || [{ name: 'status:unclaimed' }],
+    // #28: done refuses without a live self-claim, and the CLAIM below is built from the agent
+    // the CLI itself resolves, so the fixture cannot drift per machine
     comments: [],
   }
   const cli = Cli({
@@ -32,7 +34,12 @@ const harness = ({ sub, extra = [], fail = true, labels } = {}) => {
     coordFactory: ({ agent }) =>
       CoordService({
         github: {
-          viewIssue: async () => issue,
+          viewIssue: async () => ({
+            ...issue,
+            comments: [
+              { body: `**CLAIM** | agent: ${agent} | at: 1700000000000` },
+            ],
+          }),
           listIssues: async () => [issue],
           commentIssue: async () => {},
           editIssue: async () => {

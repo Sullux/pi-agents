@@ -47,6 +47,24 @@ const mutatingVerbs = ['claim', 'release', 'status', 'review', 'done']
 const world = () => {
   const dir = mkdtempSync(join(tmpdir(), 'pi13-'))
   const log = join(dir, 'gh-calls.log')
+  // #28: the shim's `issue view` answer lives in a file, because `done` now refuses an issue the
+  // caller does not hold and JSON full of quotes would fight the shim's own shell quoting. The
+  // claimant is this world's COORD_AGENT (pi/tester), which cleanAgent folds to 'tester'.
+  writeFileSync(
+    join(dir, 'issue-view.json'),
+    JSON.stringify({
+      number: 999999,
+      title: '#13 shim fixture',
+      labels: [],
+      body: '## Files\nsrc/foo.js',
+      comments: [
+        {
+          body: '**CLAIM** | agent: pi/tester | at: 1700000000000',
+          createdAt: '2023-11-15T00:00:00.000Z',
+        },
+      ],
+    }),
+  )
   writeFileSync(
     join(dir, 'gh'),
     [
@@ -54,6 +72,11 @@ const world = () => {
       'echo "$@" >> "$PI13_LOG"',
       'case "$*" in',
       '  *"issue list"*) echo "[]" ;;',
+      // #28: `issue view` used to fall through to `{}` above, and `done` now refuses an issue the
+      // caller does not hold, so the shim has to hand back a timeline carrying THIS world's
+      // claimant (COORD_AGENT=pi/tester, which cleanAgent folds to 'tester'). The answer lives in a
+      // file because JSON full of double quotes fights the shim's own shell quoting.
+      '  *"issue view"*) cat "${PI13_LOG%/*}/issue-view.json" ;;',
       '  *) echo "{}" ;;',
       'esac',
     ].join('\n') + '\n',
@@ -168,7 +191,14 @@ describe('#13 the coord service cannot reach a gh write with a bad number', () =
           number: n,
           body: '## Files\nsrc/foo.js',
           labels: [],
-          comments: [],
+          // #28: the done control below needs a live self-claim, or the ownership guard refuses
+          // before closeIssue and the arm would prove nothing about the #13 write path
+          comments: [
+            {
+              body: '**CLAIM** | agent: pi/tester | at: 1700000000000',
+              createdAt: '2023-11-15T00:00:00.000Z',
+            },
+          ],
         }
       },
       listIssues: async () => {
