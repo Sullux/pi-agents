@@ -61,26 +61,37 @@ const world = () => {
   chmodSync(join(dir, 'gh'), 0o755)
   const calls = () =>
     existsSync(log)
-      ? readFileSync(log, 'utf8').split('\n').filter((line) => line.trim())
+      ? readFileSync(log, 'utf8')
+          .split('\n')
+          .filter((line) => line.trim())
       : []
   const run = (args) => {
     rmSync(log, { force: true })
-    const res = spawnSync(process.execPath, [join(repoRoot, 'bin', 'page'), ...args], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        PATH: `${dir}:${process.env.PATH}`,
-        PI13_LOG: log,
-        // Never address a real repo from a pin, whatever the guard does.
-        COORD_REPO: 'Sullux/pi-agents-fake',
-        COORD_AGENT: 'pi/tester',
+    const res = spawnSync(
+      process.execPath,
+      [join(repoRoot, 'bin', 'page'), ...args],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PATH: `${dir}:${process.env.PATH}`,
+          PI13_LOG: log,
+          // Never address a real repo from a pin, whatever the guard does.
+          COORD_REPO: 'Sullux/pi-agents-fake',
+          COORD_AGENT: 'pi/tester',
+        },
+        // The verb is the argv, and `run()` reads process.argv.
       },
-      // The verb is the argv, and `run()` reads process.argv.
-    })
+    )
     return res
   }
-  return { dir, calls, run, done: () => rmSync(dir, { recursive: true, force: true }) }
+  return {
+    dir,
+    calls,
+    run,
+    done: () => rmSync(dir, { recursive: true, force: true }),
+  }
 }
 
 const runVerb = (world, verb, extra = []) =>
@@ -89,9 +100,19 @@ const runVerb = (world, verb, extra = []) =>
 describe('#13 the argument validator refuses before anything is parsed downstream', () => {
   it('isIssueNumber takes exactly positive integers, and NaN is what a missing arg becomes', () => {
     assert.deepEqual(
-      [undefined, '', ' ', null, 'abc', '1.5', 0, -3, NaN, Infinity, 'NaN'].filter(
-        isIssueNumber,
-      ),
+      [
+        undefined,
+        '',
+        ' ',
+        null,
+        'abc',
+        '1.5',
+        0,
+        -3,
+        NaN,
+        Infinity,
+        'NaN',
+      ].filter(isIssueNumber),
       [],
       'every junk shape must be refused',
     )
@@ -112,10 +133,17 @@ describe('#13 the argument validator refuses before anything is parsed downstrea
     assert.match(bad.error, /missing issue number/)
     assert.match(bad.error, /Usage: page coord status <issue> "<message>"/)
     assert.match(bad.error, /page coord board/)
-    assert.doesNotMatch(bad.error, /NaN/, 'the refusal must not echo the junk value as an id')
+    assert.doesNotMatch(
+      bad.error,
+      /NaN/,
+      'the refusal must not echo the junk value as an id',
+    )
     assert.deepEqual(requireIssueNumber('done', '42'), { value: 42 })
     // an invalid-but-present value says so, rather than reporting it as absent
-    assert.match(requireIssueNumber('claim', '1e1.5').error, /invalid issue number/)
+    assert.match(
+      requireIssueNumber('claim', '1e1.5').error,
+      /invalid issue number/,
+    )
   })
 
   it('requireMessage refuses a contentless protocol line', () => {
@@ -136,7 +164,12 @@ describe('#13 the coord service cannot reach a gh write with a bad number', () =
     const github = {
       viewIssue: async (n) => {
         calls.push(['viewIssue', n])
-        return { number: n, body: '## Files\nsrc/foo.js', labels: [], comments: [] }
+        return {
+          number: n,
+          body: '## Files\nsrc/foo.js',
+          labels: [],
+          comments: [],
+        }
       },
       listIssues: async () => {
         calls.push(['listIssues'])
@@ -179,7 +212,11 @@ describe('#13 the coord service cannot reach a gh write with a bad number', () =
     const { coord, calls } = serviceWith()
     const res = await coord.status(42, 'still working')
     assert.equal(res.ok, true)
-    assert.deepEqual(calls, [['commentIssue', 42]], 'status comments and nothing else')
+    assert.deepEqual(
+      calls,
+      [['commentIssue', 42]],
+      'status comments and nothing else',
+    )
   })
 
   it('control: a valid done still reaches closeIssue, and a bad one never does', async () => {
@@ -207,11 +244,27 @@ describe('#13 the CLI refuses the no-arg form for every mutating verb', () => {
         new RegExp(`Usage: page coord ${verb} `),
         `${verb} must name its own arity`,
       )
-      assert.match(res.stderr, /page coord board/, `${verb} must point at the queue`)
-      assert.doesNotMatch(merged, /Command failed/, `${verb} must not crash in a spawn`)
+      assert.match(
+        res.stderr,
+        /page coord board/,
+        `${verb} must point at the queue`,
+      )
+      assert.doesNotMatch(
+        merged,
+        /Command failed/,
+        `${verb} must not crash in a spawn`,
+      )
       assert.doesNotMatch(merged, /NaN/, `${verb} must not echo NaN as an id`)
-      assert.doesNotMatch(merged, /undefined/, `${verb} must not leak the raw positional`)
-      assert.equal(res.stdout.trim(), '', `${verb} must not print a success line`)
+      assert.doesNotMatch(
+        merged,
+        /undefined/,
+        `${verb} must not leak the raw positional`,
+      )
+      assert.equal(
+        res.stdout.trim(),
+        '',
+        `${verb} must not print a success line`,
+      )
       assert.deepEqual(w.calls(), [], `${verb} dispatched a board call`)
     }
   })

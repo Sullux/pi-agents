@@ -494,7 +494,10 @@ const Cli = ({
         const num = requireIssueNumber('review', positionals[1])
         const msg = requireMessage('review', positionals.slice(2).join(' '))
         if (failed(num, msg)) return 1
-        const res = await coord.review(num.value, { pr: flags.pr, text: msg.value })
+        const res = await coord.review(num.value, {
+          pr: flags.pr,
+          text: msg.value,
+        })
         if (!res.ok) {
           stderr(`Error: ${res.error}`)
           return 1

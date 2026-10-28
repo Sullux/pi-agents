@@ -26,9 +26,7 @@ const missing = (raw) => raw === undefined || `${raw}`.trim() === ''
 
 const usageLine = (sub, problem, raw) =>
   `Error: coord ${sub}: ${problem}` +
-  (missing(raw)
-    ? ''
-    : ` ${JSON.stringify(`${raw}`)}`) +
+  (missing(raw) ? '' : ` ${JSON.stringify(`${raw}`)}`) +
   `. Usage: page coord ${USAGE[sub] || sub}.` +
   ' For the whole queue use: page coord board'
 
