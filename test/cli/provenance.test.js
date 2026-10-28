@@ -203,6 +203,10 @@ const harness = (provenance) => {
   const err = []
   const cli = Cli({
     coordFactory: () => fakeCoord,
+    // #23 added the `github` seam. Injecting it keeps these pins off the real
+    // `git remote get-url origin` spawn, which used to run for every one of them because nothing
+    // printed a repo before, so nobody had to control which one it resolved.
+    github: { repo: 'Sullux/test-repo' },
     provenance,
     stdout: (line) => out.push(line),
     stderr: (line) => err.push(line),
@@ -242,7 +246,7 @@ describe('coord dispatch (#18)', () => {
     })
     const code = await h.run(['coord', 'provenance'])
     assert.equal(code, 0)
-    assert.deepEqual(h.out, ['path /x\ntrust x'])
+    assert.deepEqual(h.out, ['path /x\ntrust x\ncoord repo  Sullux/test-repo'])
     assert.deepEqual(h.err, [])
   })
 

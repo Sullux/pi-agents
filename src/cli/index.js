@@ -73,6 +73,11 @@ const Cli = ({
   configLoader: customLoader,
   sessionTracker: customTracker,
   coordFactory: customCoord,
+  // #23: GitHubClient spawns `git remote get-url origin` whenever nothing else resolves the repo, so
+  // it is a non-deterministic dependency and its peers here are already injected (configLoader,
+  // sessionTracker, provenance). Without the seam there was no in-process way to pin WHICH repo a verb
+  // acted on - which is the entire point of naming the target.
+  github: customGithub,
   provenance = Provenance(),
   stdout = console.log,
   stderr = console.error,
@@ -407,11 +412,29 @@ const Cli = ({
 
     if (command === 'coord') {
       const sub = positionals[0]
+      const repo = flags.repo || ''
+      const github = customGithub || GitHubClient({ repo })
+      const agent = process.env.COORD_AGENT || 'agent-cli'
+      const coord = customCoord
+        ? customCoord({ github, agent })
+        : CoordService({ github, agent })
+      // #23: a bare `#21` does not say WHICH #21. Both Sullux repos have a #21 and a #23, and
+      // GitHubClient resolves --repo -> COORD_REPO -> the cwd's origin remote. Following the checkout
+      // you stand in is correct behavior; the defect is that the output never named the target, so a
+      // session in a pitcairn worktree meaning a pi-agents issue mutated the same NUMBER in the wrong
+      // repo and `Marked #21 done` read identically either way - measured on myself at 06:17 UTC, when
+      // `coord done 21` closed pitcairn #21 and posted a bogus DONE citing a pi-agents PR number.
+      // The target is an END-OF-LINE suffix, which is measured rather than cosmetic: the inline
+      // `Marked Sullux/pi-agents#21 done` first proposed in the issue breaks `/Claimed #999999/` and
+      // `/Posted to hub #\d+/`, and loosening three unrelated pins to fund a wording change is a bad
+      // trade. `unresolved` names the no-remote case instead of hiding it, and there is deliberately no
+      // refusal - the cwd default is what agents actually want.
+      const target = github.repo || 'unresolved (gh cwd default)'
       // #18: this checkout IS the installed program, so an agent's verdict is only as trustworthy as
       // the tree the shim happened to exec. `provenance` is the on-demand readout, and for that verb
       // describe() below is the whole answer, so the advisory is not doubled.
       if (sub === 'provenance') {
-        stdout(provenance.describe())
+        stdout(`${provenance.describe()}\ncoord repo  ${target}`)
         return 0
       }
       // ADVISORY ONLY: stderr, never stdout (agents grep the board), and it changes no exit code.
@@ -422,12 +445,6 @@ const Cli = ({
         const advisory = provenance.note()
         if (advisory) stderr(advisory)
       } catch {}
-      const repo = flags.repo || ''
-      const github = GitHubClient({ repo })
-      const agent = process.env.COORD_AGENT || 'agent-cli'
-      const coord = customCoord
-        ? customCoord({ github, agent })
-        : CoordService({ github, agent })
 
       if (sub === 'board') {
         stdout(await coord.board())
@@ -451,7 +468,7 @@ const Cli = ({
           stderr(posted.error)
           return 1
         }
-        stdout(`Posted to hub #${posted.hubNumber}`)
+        stdout(`Posted to hub #${posted.hubNumber} @${target}`)
         return 0
       }
       // Every mutating verb below addresses one issue, and a missing positional
@@ -475,7 +492,7 @@ const Cli = ({
           stderr(`Error: ${res.error}`)
           return 1
         }
-        stdout(`Claimed #${num.value}`)
+        stdout(`Claimed #${num.value} @${target}`)
         // #863: an in-review overlap warns rather than fences. Printing it here is what makes the
         // warning real - the claim still succeeded, so the agent needs to be told a rebase is owed.
         for (const w of res.warnings || []) {
@@ -496,7 +513,7 @@ const Cli = ({
           stderr(`Error: ${res.error}`)
           return 1
         }
-        stdout(`Released #${num.value}`)
+        stdout(`Released #${num.value} @${target}`)
         return 0
       }
       if (sub === 'status') {
@@ -508,7 +525,7 @@ const Cli = ({
           stderr(`Error: ${res.error}`)
           return 1
         }
-        stdout(`Status updated on #${num.value}`)
+        stdout(`Status updated on #${num.value} @${target}`)
         return 0
       }
       if (sub === 'review') {
@@ -523,7 +540,7 @@ const Cli = ({
           stderr(`Error: ${res.error}`)
           return 1
         }
-        stdout(`Moved #${num.value} to in-review`)
+        stdout(`Moved #${num.value} to in-review @${target}`)
         return 0
       }
       if (sub === 'done') {
@@ -534,7 +551,7 @@ const Cli = ({
           stderr(`Error: ${res.error}`)
           return 1
         }
-        stdout(`Marked #${num.value} done`)
+        stdout(`Marked #${num.value} done @${target}`)
         return 0
       }
     }
