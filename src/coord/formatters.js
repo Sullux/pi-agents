@@ -1,5 +1,22 @@
 const { ownerOf, cleanAgent } = require('./owner')
-const { parseScope } = require('./scope')
+const { parseScope, labelNames, statusOf } = require('./scope')
+
+// #15: `labelNames` (scope.js) tolerates BOTH shapes a caller can hand us - gh's object labels
+// (`{ name }`) and a normalized string list - and the gate (`statusOf`) already reads through it.
+// The formatters read `l.name` directly, so normalizing labels first produced a coordination gate
+// that worked and a board that threw `TypeError: Cannot read properties of undefined (reading
+// 'startsWith')` at the status site. The worse half is silent: the `hub` filter compares
+// `l.name === 'hub'`, which cannot throw and therefore keeps the hub issue, rendering it as a board
+// row - visible only once the crash is fixed. One accessor for both modules, all six sites.
+const hasLabel = (issue, name) => labelNames(issue).includes(name)
+
+const labelValue = (issue, prefix, fallback = '-') =>
+  labelNames(issue)
+    .find((name) => name?.startsWith(prefix))
+    ?.slice(prefix.length) || fallback
+
+const priorityLabel = (issue) =>
+  labelNames(issue).find((name) => /^p\d$/.test(name || '')) || '-'
 
 const pad = (str = '', len = 0) =>
   str.length >= len ? str : str + ' '.repeat(len - str.length)
@@ -13,9 +30,7 @@ const scopeCell = (body) => parseScope(body).join(' ') || '!!NO-SCOPE'
 
 const formatBoard = (issues = [], currentAgent = '') => {
   const cleanCurrent = cleanAgent(currentAgent)
-  const nonHubIssues = issues.filter(
-    (i) => !i.labels?.some((l) => l.name === 'hub'),
-  )
+  const nonHubIssues = issues.filter((i) => !hasLabel(i, 'hub'))
 
   const lines = [
     '== board ==',
@@ -24,15 +39,9 @@ const formatBoard = (issues = [], currentAgent = '') => {
 
   for (const issue of nonHubIssues) {
     const owner = ownerOf(issue)
-    const statusLabel =
-      issue.labels
-        ?.find((l) => l.name.startsWith('status:'))
-        ?.name.replace('status:', '') || 'unclaimed'
-    const wsLabel =
-      issue.labels
-        ?.find((l) => l.name.startsWith('ws:'))
-        ?.name.replace('ws:', '') || '-'
-    const pLabel = issue.labels?.find((l) => l.name.match(/^p\d$/))?.name || '-'
+    const statusLabel = statusOf(issue)
+    const wsLabel = labelValue(issue, 'ws:')
+    const pLabel = priorityLabel(issue)
     const files = scopeCell(issue.body)
     const ownerDisplay = owner
       ? owner === cleanCurrent
@@ -108,9 +117,7 @@ const formatSync = ({
   ]
 
   // 3. Needs-human
-  const needsHuman = issues.filter((i) =>
-    i.labels?.some((l) => l.name === 'needs-human'),
-  )
+  const needsHuman = issues.filter((i) => hasLabel(i, 'needs-human'))
   const humanLines = [
     '\n== needs-human ==',
     needsHuman.length
@@ -120,7 +127,7 @@ const formatSync = ({
 
   // 4. Hub tail
   const hubIssue = issues.find(
-    (i) => i.number === hubNumber || i.labels?.some((l) => l.name === 'hub'),
+    (i) => i.number === hubNumber || hasLabel(i, 'hub'),
   )
   const hubComments = (hubIssue?.comments || []).slice(-5)
   const hubLines = [

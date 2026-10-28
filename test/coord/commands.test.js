@@ -252,3 +252,135 @@ describe('Coordination Protocol: Service Methods', () => {
     assert.ok(board.includes(longAgent))
   })
 })
+
+// #15: `scope.js`'s `labelNames` tolerates gh's object labels AND a normalized string list, and the
+// gate (`statusOf`) already read through it - but `formatters.js` read `l.name` directly at six
+// sites, so a caller that normalized labels first got a coordination gate that worked and a board
+// that threw `TypeError: Cannot read properties of undefined (reading 'startsWith')`. The contract
+// is that BOTH shapes render the SAME row. The `hub` filter is asserted under both shapes because it
+// could not throw (`l.name === 'hub'` is simply false for a string), so it silently kept the hub
+// issue as a board row - a wrong render, not a crash, and visible only once the crash was fixed.
+describe('Coordination Protocol: label-shape contract (#15)', () => {
+  const status = (labels) => ({
+    number: 42,
+    title: 'Label shape probe',
+    body: '## Files\nsrc/x.js',
+    labels,
+    comments: [{ body: '**CLAIM** | agent: alpha | at: 2026-10-28T04:00:00Z' }],
+  })
+  const hubRow = (labels) => ({
+    number: 4,
+    title: 'Coordination hub',
+    body: '## Files\nsrc/hub.js',
+    labels,
+    comments: [],
+  })
+
+  const asObjects = (...names) => names.map((name) => ({ name }))
+  const asStrings = (...names) => names
+
+  it('renders the identical board row from object labels and string labels', () => {
+    const { formatBoard } = require('../../src/coord/formatters')
+    const obj = formatBoard(
+      [status(asObjects('status:claimed', 'ws:qa-audit', 'p2'))],
+      'other',
+    )
+    const str = formatBoard(
+      [status(asStrings('status:claimed', 'ws:qa-audit', 'p2'))],
+      'other',
+    )
+
+    assert.ok(
+      /^#42/m.test(obj),
+      'non-vacuity: the object row must actually render',
+    )
+    assert.equal(obj, str)
+    assert.ok(obj.includes('claimed'), 'status cell survives the shape change')
+    assert.ok(obj.includes('qa-audit'), 'ws cell survives the shape change')
+    assert.ok(obj.includes('p2'), 'priority cell survives the shape change')
+    assert.ok(obj.includes('alpha'), 'owner cell survives the shape change')
+  })
+
+  it('filters the hub out of the board under BOTH shapes - the silent half of #15', () => {
+    const { formatBoard } = require('../../src/coord/formatters')
+    const obj = formatBoard(
+      [hubRow(asObjects('hub')), status(asObjects('status:claimed'))],
+      'other',
+    )
+    const str = formatBoard(
+      [hubRow(asStrings('hub')), status(asStrings('status:claimed'))],
+      'other',
+    )
+
+    assert.ok(
+      !/^#4 /m.test(obj),
+      'hub must not render as a board row (object shape)',
+    )
+    assert.ok(
+      !/^#4 /m.test(str),
+      'hub must not render as a board row (string shape)',
+    )
+    assert.equal(obj, str)
+    assert.ok(/^#42/m.test(str), 'non-vacuity: the work row is still there')
+  })
+
+  it('falls back to unclaimed / - / - for empty labels under both shapes', () => {
+    const { formatBoard } = require('../../src/coord/formatters')
+    const obj = formatBoard([status([])], 'other')
+    const str = formatBoard([status([])], 'other')
+
+    assert.equal(obj, str)
+    assert.ok(
+      obj.includes('unclaimed'),
+      'an absent status label still defaults, not throws',
+    )
+  })
+
+  it('formatSync reads its two label sites through the same accessor', () => {
+    const { formatSync } = require('../../src/coord/formatters')
+    const build = (labels, humanLabels) =>
+      formatSync({
+        issues: [hubRow(labels), status(humanLabels)],
+        currentAgent: 'other',
+        hubNumber: 99,
+        staleMinutes: 45,
+        now: Date.parse('2026-10-28T05:00:00Z'),
+      })
+
+    const obj = build(
+      asObjects('hub'),
+      asObjects('needs-human', 'status:claimed'),
+    )
+    const str = build(
+      asStrings('hub'),
+      asStrings('needs-human', 'status:claimed'),
+    )
+
+    assert.ok(obj.includes('== needs-human =='), 'section renders')
+    assert.ok(
+      /== needs-human ==\n  #42/.test(obj),
+      'non-vacuity: the flagged issue is LISTED, not just the header',
+    )
+    assert.ok(
+      /hub #4,/.test(str),
+      'hub located by label under the string shape too',
+    )
+    assert.equal(obj, str)
+  })
+
+  it('exports the tolerant accessor so there is one definition, not two', () => {
+    const { labelNames, statusOf } = require('../../src/coord/scope')
+
+    assert.deepEqual(labelNames({ labels: [{ name: 'p1' }, 'p2'] }), [
+      'p1',
+      'p2',
+    ])
+    assert.deepEqual(
+      labelNames({ labels: undefined }),
+      [],
+      'no labels is empty, not a throw',
+    )
+    assert.equal(statusOf({ labels: ['status:in-review'] }), 'in-review')
+    assert.equal(statusOf({ labels: [{ name: 'status:claimed' }] }), 'claimed')
+  })
+})

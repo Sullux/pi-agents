@@ -167,6 +167,7 @@ const checkScopeCollision = (
 module.exports = {
   parseScope,
   parseSplits,
+  labelNames,
   statusOf,
   checkScopeCollision,
 }
