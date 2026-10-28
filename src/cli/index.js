@@ -49,7 +49,8 @@ Coordination Commands:
   coord claim <issue> [--plan <p>]   Claim an issue
   coord release <issue> [--reason]   Release an issue claim
   coord status <issue> <text>        Post heartbeat progress update
-  coord done <issue> [--pr <n>] [message]   Mark issue completed (message is optional)
+  coord review <issue> --pr <n> "<verdict>"   Verdict, expected from a NON-owner: no ownership check here is intentional (#28)
+  coord done <issue> [--pr <n>] [message] [--force]   Mark issue completed; refuses unless you hold the claim, --force logs the override (#28)
   coord hub <text>                   Post update to coordination hub
   coord hub --body-file <path>       Post update from a markdown file
   coord provenance                   Report which checkout and commit are running
@@ -568,13 +569,25 @@ const Cli = ({
         // unconditional, not conditional on the issue already being closed, which is
         // the wrong explanation I published for it before reading the dispatch.
         const text = positionals.slice(2).join(' ').trim()
-        const res = await coord.done(num.value, { pr: flags.pr, text })
+        const res = await coord.done(num.value, {
+          pr: flags.pr,
+          text,
+          force: Boolean(flags.force),
+        })
         if (!res.ok) {
           stderr(`Error: ${res.error}`)
           return 1
         }
         stdout(`Marked #${num.value} done @${target}`)
         reportLabels(res)
+        // #28: the override has to leave a trace in the caller's own output, because on the shared
+        // account nothing else attributes the close. `forced` is only true when the guard WOULD have
+        // refused - a routine self-close stays one clean line.
+        if (res.forced) {
+          stdout(
+            `  ! --force used: the ownership check was bypassed on #${num.value}${res.owner ? ` (held by agent-${res.owner})` : ' (unheld)'}`,
+          )
+        }
         // A SECOND line, never an appended clause: repo-resolution.test.js asserts the
         // success line byte-for-byte for every mutating verb, and #23 chose the
         // end-of-line suffix shape precisely so three unrelated pins would not have to

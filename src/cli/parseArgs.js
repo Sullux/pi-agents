@@ -13,6 +13,14 @@ const parseArgs = (argv = []) => {
   const positionals = []
   const flags = {}
 
+  // #28: a flag that carries no value must not swallow the token after it. The loop is greedy by
+  // design (--repo <r>, --pr <n>, --plan <p> all read the NEXT arg as their value), so a boolean
+  // has to be declared. Measured before the fix: `coord done 21 --force "attested"` put the
+  // message into flags.force and left `positionals` empty, so the **DONE** comment went out
+  // header-only and the attestation the message exists to carry was silently dropped.
+  // Only flags proven valueless at every call site belong here - the rest keep today's shape.
+  const valueless = new Set(['force', 'kill'])
+
   let i = 0
   while (i < args.length) {
     const item = args[i]
@@ -22,7 +30,11 @@ const parseArgs = (argv = []) => {
         const [k, v] = key.split('=')
         flags[k] = v
         i += 1
-      } else if (i + 1 < args.length && !args[i + 1].startsWith('-')) {
+      } else if (
+        !valueless.has(key) &&
+        i + 1 < args.length &&
+        !args[i + 1].startsWith('-')
+      ) {
         flags[key] = args[i + 1]
         i += 2
       } else {

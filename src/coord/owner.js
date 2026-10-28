@@ -72,10 +72,24 @@ const isMine = (issue, agent) => {
   return Boolean(cleanCurrent && owner === cleanCurrent)
 }
 
+// #28: did this agent EVER sign a CLAIM on this issue, live or not? `ownerOf` answers "who holds
+// it now", which is the wrong question for the reopen-then-reclose flow: a claimant whose own
+// DONE (or a RELEASE) already de-owned the issue is still the person who claimed it, and forcing
+// them through --force to finish their own close-out would train the fleet to reach for the
+// override on routine work. Same two shared parsers as ownerOf, so the token shape cannot drift.
+const hasClaimBy = (comments = [], agent = '') => {
+  const clean = cleanAgent(agent)
+  if (!clean) return false
+  return (comments || []).some(
+    (c) => markerOf(c.body) === 'CLAIM' && agentOf(c.body) === clean,
+  )
+}
+
 module.exports = {
   cleanAgent,
   markerOf,
   agentOf,
   ownerOf,
   isMine,
+  hasClaimBy,
 }
