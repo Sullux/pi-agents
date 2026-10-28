@@ -252,11 +252,21 @@ describe('coord dispatch (#18)', () => {
       describe: () => 'D',
     })
     assert.equal(await h.run(['coord', 'frobnicate']), 1)
-    // measured, not assumed: an unknown coord sub falls through to printHelp(), which writes to the
-    // GLOBAL console.log rather than the injected sink, then returns 1. What this pins is that the
-    // advisory neither hijacks that exit code nor leaks onto stdout.
+    // #19 lifted the weakening that lived here. printHelp() used to write to the GLOBAL console.log,
+    // so this arm could only pin that the injected sink stayed empty - a true statement about a
+    // render nobody could see. The usage text now arrives in the sink, so the assertion is positive:
+    // the fall-through is observable in-process, the advisory stays on stderr, the exit code stays 1.
     assert.deepEqual(h.err, ['coord note: TEST NOTE'])
-    assert.deepEqual(h.out, [])
+    assert.equal(
+      h.out.length,
+      1,
+      'the usage fall-through wrote a different number of lines',
+    )
+    assert.match(
+      h.out[0],
+      /Usage: page <command>/,
+      'the unknown verb no longer renders usage into the injected sink',
+    )
   })
 
   it('reads the real binary for the default wiring, not only injected fakes', () => {
