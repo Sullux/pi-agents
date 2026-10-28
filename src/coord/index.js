@@ -3,6 +3,13 @@ const { isIssueNumber } = require('./issueNumber')
 const { parseScope, checkScopeCollision } = require('./scope')
 const { evaluateClaimRace } = require('./race')
 const { formatBoard, formatSync } = require('./formatters')
+// #29 guard 2 lives with guard 1 in src/cli/hubText.js, which is where hub-text rules
+// are composed, and that module requires nothing - so this edge cannot form a cycle.
+// Applying it HERE rather than in the CLI is the whole point: the CLI hands hub() the
+// raw message, hub() strips a leading `on|blocked|next` (#3), and a stamp prepended
+// before that strip would hide the subverb behind it and resurrect the literal-`on`
+// post #387 was filed for. Stamping the composed body keeps both guards live.
+const { ensureStamp } = require('../cli/hubText')
 
 // `gh issue list --json comments` returns only the FIRST 100 comments of an issue
 // (measured on hub #4: 100 returned, 645 real), so every timeline-dependent read
@@ -211,7 +218,12 @@ const CoordService = ({
     const commentBody =
       `**SYNC** | agent: agent-${cleanCurrent} | human: @${human} | at: ${now()}` +
       `\n\n${cleanedText}`
-    await github.commentIssue(hubNumber, commentBody)
+    // The stamp check refuses BEFORE the call, like the two guards above it: a hub line
+    // is a fleet timeline, and a post that reports success while carrying no readable
+    // time (or a bogus one the author typed) is the defect #29 was filed for.
+    const stamped = ensureStamp(commentBody, now)
+    if (stamped.error) return { ok: false, error: stamped.error }
+    await github.commentIssue(hubNumber, stamped.text)
     return { ok: true, hubNumber }
   }
 

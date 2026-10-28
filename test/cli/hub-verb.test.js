@@ -95,3 +95,45 @@ describe('page coord hub (#3)', () => {
     assert.equal(posted.length, 0)
   })
 })
+
+// #29 guard 1 at the verb: the placeholder used to print `Posted to hub #4` and exit 0
+// with the literal token on the fleet timeline. This is the arm that reproduces the
+// reported symptom, not the helper's reaction to it - refusal means exit 1, an empty
+// stdout, and no API call.
+describe('page coord hub refuses an unread placeholder (#29 guard 1)', () => {
+  const harness = () => {
+    const posted = []
+    const out = []
+    const err = []
+    const cli = Cli({
+      coordFactory: ({ agent }) =>
+        CoordService({
+          github: {
+            commentIssue: async (num, body) => posted.push({ num, body }),
+          },
+          agent,
+          human: 'Sullux',
+        }),
+      stdout: (s) => out.push(s),
+      stderr: (s) => err.push(s),
+    })
+    return { cli, posted, out, err }
+  }
+
+  it('refuses the hand-typed stamp slot without posting', async () => {
+    const { cli, posted, out, err } = harness()
+    const code = await cli.run(['coord', 'hub', '17:0X wave two merged'])
+    assert.equal(code, 1)
+    assert.equal(posted.length, 0, 'nothing reached the hub')
+    assert.equal(out.join(''), '', 'no "Posted to hub" success line')
+    assert.match(err.join('\n'), /unreplaced time token/)
+  })
+
+  it('posts a measured stamp, so the guard cannot be a stamp ban', async () => {
+    const { cli, posted } = harness()
+    const code = await cli.run(['coord', 'hub', '16:59Z wave two merged'])
+    assert.equal(code, 0)
+    assert.equal(posted.length, 1)
+    assert.match(posted[0].body.split('\n')[2], /^16:59Z wave two merged$/)
+  })
+})

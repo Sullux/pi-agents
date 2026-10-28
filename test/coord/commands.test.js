@@ -135,7 +135,10 @@ describe('Coordination Protocol: Service Methods', () => {
       '',
       'blank line after the marker, like CLAIM/STATUS/DONE',
     )
-    assert.equal(message, 'body text here')
+    // #29 changed this expectation on purpose: the message line now leads with the
+    // tool's own stamp, so `at: <ms>` in the marker is not the only readable time.
+    // The marker stays the FIRST line - the stamp belongs below it, not above it.
+    assert.equal(message, '16:00Z body text here')
   })
 
   it('hub stamps the INJECTED clock, so two posts are orderable', async () => {
@@ -382,5 +385,76 @@ describe('Coordination Protocol: label-shape contract (#15)', () => {
     )
     assert.equal(statusOf({ labels: ['status:in-review'] }), 'in-review')
     assert.equal(statusOf({ labels: [{ name: 'status:claimed' }] }), 'claimed')
+  })
+})
+
+// #29 guard 2 at the verb that owns the post. These arms exist because the stamp is
+// applied HERE rather than in the CLI: hub() strips a leading `on|blocked|next` first
+// (#3), and a stamp prepended before that strip would bury the subverb behind it and
+// resurrect the literal-`on` post - so the pair below is a coexistence pin, not a
+// duplicate of the unit arms in test/cli/hubText.test.js.
+describe('coord hub stamps its own line (#29 guard 2)', () => {
+  const stampHarness = (nowValue) => {
+    const posted = []
+    const coord = CoordService({
+      github: {
+        commentIssue: async (num, body) => posted.push({ num, body }),
+      },
+      agent: 'delta',
+      human: 'Sullux',
+      now: () => nowValue,
+    })
+    const messageLine = () => posted[0].body.split('\n')[2]
+    return { coord, posted, messageLine }
+  }
+  const CLOCK = Date.UTC(2025, 10, 24, 16, 0, 0)
+
+  it('prepends the injected clock to the message line, below the marker', async () => {
+    const { coord, posted, messageLine } = stampHarness(CLOCK)
+    const res = await coord.hub('wave two merged at the tip')
+    assert.equal(res.ok, true)
+    assert.equal(posted.length, 1)
+    assert.ok(
+      posted[0].body.split('\n')[0].startsWith('**SYNC**'),
+      'the protocol marker stays the first line',
+    )
+    assert.equal(messageLine(), '16:00Z wave two merged at the tip')
+  })
+
+  it('stamps AFTER the subverb strip, so both guards stay live', async () => {
+    const { coord, messageLine } = stampHarness(CLOCK)
+    await coord.hub('on starting journey tests')
+    assert.equal(
+      messageLine(),
+      '16:00Z starting journey tests',
+      'the literal `on` must not survive behind a stamp',
+    )
+  })
+
+  it('does not double-stamp an author who already read the clock', async () => {
+    const { coord, messageLine } = stampHarness(CLOCK)
+    await coord.hub('16:59Z reviewed the pair')
+    assert.equal(messageLine(), '16:59Z reviewed the pair')
+    const precise = stampHarness(CLOCK)
+    await precise.coord.hub('15:26:03Z merged the union')
+    assert.equal(precise.messageLine(), '15:26:03Z merged the union')
+  })
+
+  it('refuses an out-of-range leading stamp WITHOUT posting', async () => {
+    const { coord, posted } = stampHarness(CLOCK)
+    const res = await coord.hub('25:99Z bogus time')
+    assert.equal(res.ok, false)
+    assert.ok(res.error.includes('25:99Z'), res.error)
+    assert.equal(posted.length, 0, 'no API call was made')
+  })
+
+  it('leaves accurate timestamp prose alone apart from its own stamp', async () => {
+    const { coord, messageLine } = stampHarness(CLOCK)
+    await coord.hub('merged at 15:26:03Z, settled by 15:57:58Z')
+    assert.equal(
+      messageLine(),
+      '16:00Z merged at 15:26:03Z, settled by 15:57:58Z',
+      'a stamp inside the body is not the leading stamp',
+    )
   })
 })
