@@ -64,7 +64,11 @@ describe('Provenance read (#18)', () => {
         { 'rev-list --left-right --count @{u}...HEAD': '0\t2' },
         /\+2/,
       ],
-      ['unpushed branch', { 'rev-parse --short @{u}': '' }, /no upstream/],
+      [
+        'unpushed branch',
+        { 'rev-parse --short @{u}': Error('fatal: no upstream') },
+        /no upstream/,
+      ],
     ]
     for (const [label, over, expected] of cases) {
       const note = at(over).note()
@@ -81,18 +85,83 @@ describe('Provenance read (#18)', () => {
 
   it('never calls an unpushed branch the upstream tip', () => {
     // 'upstream tip' here would be a false reassurance, the exact wording a mid-probe tree needs
-    // to look legitimate; this assert is the regression pin for a bug caught while writing the note
-    const note = at({ 'rev-parse --short @{u}': '' }).note()
+    // to look legitimate; this assert is the regression pin for a bug caught while writing the note.
+    // The fake THROWS, as real git does, rather than handing back an empty string
+    const note = at({
+      'rev-parse --short @{u}': Error('fatal: no upstream configured'),
+    }).note()
     assert.doesNotMatch(note, /upstream tip/)
     assert.match(note, /no upstream/)
   })
 
   it('trusts a detached HEAD when it is the merged tip', () => {
-    // review worktrees sit detached; the verdict depends on the bytes, not the ref name
-    const p = at({ 'symbolic-ref --short -q HEAD': '' })
+    // #21: the old row handed back a sha for `@{u}`, which real git CANNOT do when detached - so the
+    // pin passed against a state that cannot occur while production accused every review worktree.
+    // A detached tree resolves its tip through origin/HEAD instead.
+    const p = Provenance({
+      cwd: '/fake/repo',
+      git: readings({
+        ...BASE,
+        'symbolic-ref --short -q HEAD': '',
+        'rev-parse --short @{u}': Error(
+          'fatal: HEAD does not point to a branch',
+        ),
+        'rev-parse --short origin/HEAD': 'abc1234',
+        'rev-list --left-right --count origin/HEAD...HEAD': '0\t0',
+      }),
+    })
     assert.equal(p.read().branch, 'detached')
+    assert.equal(p.read().tipRef, 'origin/HEAD')
     assert.equal(p.isTrusted(), true)
     assert.equal(p.note(), '')
+  })
+
+  it('accuses a detached tree that sits behind the tip, and says so in one line', () => {
+    const p = Provenance({
+      cwd: '/fake/repo',
+      git: readings({
+        ...BASE,
+        'symbolic-ref --short -q HEAD': '',
+        'rev-parse --short @{u}': Error(
+          'fatal: HEAD does not point to a branch',
+        ),
+        'rev-parse --short origin/HEAD': 'def5678',
+        'rev-list --left-right --count origin/HEAD...HEAD': '4\t0',
+      }),
+    })
+    assert.equal(p.isTrusted(), false)
+    assert.match(p.note(), /detached/)
+    assert.match(p.note(), /abc1234 vs def5678/)
+  })
+
+  it('falls back to origin/main when origin/HEAD is missing, but never for a branch', () => {
+    const detached = Provenance({
+      cwd: '/fake/repo',
+      git: readings({
+        ...BASE,
+        'symbolic-ref --short -q HEAD': '',
+        'rev-parse --short @{u}': Error(
+          'fatal: HEAD does not point to a branch',
+        ),
+        'rev-parse --short origin/HEAD': Error('fatal: ambiguous argument'),
+        'rev-parse --short origin/main': 'abc1234',
+      }),
+    })
+    assert.equal(detached.read().tipRef, 'origin/main')
+    assert.equal(detached.isTrusted(), true)
+    // the branch path must not reach the fallback, or an unpushed branch reads as being at the tip
+    const unpushed = Provenance({
+      cwd: '/fake/repo',
+      git: readings({
+        ...BASE,
+        'rev-parse --short @{u}': Error(
+          'fatal: no upstream configured for branch',
+        ),
+        'rev-parse --short origin/HEAD': 'abc1234',
+      }),
+    })
+    assert.equal(unpushed.read().tipRef, '')
+    assert.match(unpushed.note(), /no upstream/)
   })
 
   it('travels the injected git seam with the exact reads it claims', () => {

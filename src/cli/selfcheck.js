@@ -15,7 +15,17 @@ const { join } = require('node:path')
 const defaultRoot = join(__dirname, '..', '..')
 
 const defaultGit = (cwd) => (args) =>
-  execFileSync('git', args, { cwd, encoding: 'utf8' })
+  execFileSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    // #21: execFileSync forwards the child's stderr to the terminal by default, so a probe that is
+    // EXPECTED to fail - a detached HEAD has no @{u} - leaked two `fatal:` lines into every agent's
+    // session while the note claimed to degrade silently. git gets no voice here; this module
+    // decides what the reader sees. maxBuffer is raised because pi-agents #4 was a fleet-wide
+    // ENOBUFS from the same 1 MB default, and an oversized read just throws into safe().
+    stdio: ['ignore', 'pipe', 'ignore'],
+    maxBuffer: 8 * 1024 * 1024,
+  })
 
 const Provenance = ({ cwd = defaultRoot, git = defaultGit(cwd) } = {}) => {
   // one try/catch per reading, so a missing git or a non-repo degrades one field, not the command
@@ -27,19 +37,32 @@ const Provenance = ({ cwd = defaultRoot, git = defaultGit(cwd) } = {}) => {
     }
   }
 
+  // Which ref counts as "the tip" depends on the SHAPE, because `@{u}` cannot resolve on a detached
+  // HEAD (#21: treating the empty answer as drift falsely accused every review worktree, which is
+  // the normal shape of a review, of not being the merged tip). A branch compares against its own
+  // upstream - an empty answer there genuinely means unpushed, and the fallback must NOT be
+  // reachable from that path, or an unpushed branch would be reassured with 'upstream tip'.
+  const tipFor = (isBranch) =>
+    (isBranch ? ['@{u}'] : ['origin/HEAD', 'origin/main'])
+      .map((ref) => ({ ref, sha: safe(['rev-parse', '--short', ref]) }))
+      .find((entry) => entry.sha !== '') ?? { ref: '', sha: '' }
+
   const read = () => {
     const sha = safe(['rev-parse', '--short', 'HEAD'])
-    // no symbolic ref means detached, which is fine when it sits on the merged tip
-    const branch = safe(['symbolic-ref', '--short', '-q', 'HEAD']) || 'detached'
-    const upstreamSha = safe(['rev-parse', '--short', '@{u}'])
-    const counts = safe(['rev-list', '--left-right', '--count', '@{u}...HEAD'])
+    const name = safe(['symbolic-ref', '--short', '-q', 'HEAD'])
+    const tip = tipFor(name !== '')
+    const counts = tip.ref
+      ? safe(['rev-list', '--left-right', '--count', `${tip.ref}...HEAD`])
+      : ''
     const [behind, ahead] = counts.split(/\s+/).map((n) => Number(n) || 0)
     return {
       cwd,
       sha,
-      branch,
+      // no symbolic ref means detached, which is fine when it sits on the tip
+      branch: name || 'detached',
       dirty: safe(['status', '--porcelain']) !== '',
-      upstreamSha,
+      upstreamSha: tip.sha,
+      tipRef: tip.ref,
       ahead: ahead || 0,
       behind: behind || 0,
       measured: sha !== '',
@@ -89,7 +112,7 @@ const Provenance = ({ cwd = defaultRoot, git = defaultGit(cwd) } = {}) => {
       `sha        ${known('unknown', state.sha)}`,
       `branch     ${known('unknown', state.branch)}`,
       `worktree   ${known('unknown', state.dirty ? 'dirty' : 'clean')}`,
-      `upstream   ${state.upstreamSha || 'none'}`,
+      `upstream   ${state.upstreamSha ? `${state.upstreamSha} (via ${state.tipRef})` : 'none'}`,
       `drift      ${state.upstreamSha ? `${state.ahead} ahead / ${state.behind} behind` : 'unknown'}`,
       `trust      ${trust}`,
     ].join('\n')
