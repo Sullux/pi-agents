@@ -90,7 +90,14 @@ const CoordService = ({
       await github.editIssue(number, edits)
       return {}
     } catch (error) {
-      return { labelWarning: String(error?.message || error).trim() }
+      // gh's stderr is the sentence an operator needs; execFileSync's message prefixes it with
+      // `Command failed: gh issue edit ...`, which repeats what the warning already says. Prefer
+      // stderr, fall back to the message, and collapse to ONE line so the `  ! ` decoration from
+      // the CLI actually covers the whole warning instead of its first line only.
+      const detail = String(error?.stderr || error?.message || error)
+        .replace(/\s+/g, ' ')
+        .trim()
+      return { labelWarning: detail }
     }
   }
 

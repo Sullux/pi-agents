@@ -83,6 +83,10 @@ describe('page coord reports a failed label edit as a warning, not a failure (#3
       const warn = warningLines(h.out)
       assert.equal(warn.length, 1, h.out.join(' | '))
       assert.ok(
+        !warn[0].includes('\n'),
+        `the whole warning must sit on the one decorated line: ${warn[0]}`,
+      )
+      assert.ok(
         warn[0].includes("'status:unclaimed' not found"),
         `the warning carries gh's own words: ${warn[0]}`,
       )

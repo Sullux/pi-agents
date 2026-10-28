@@ -556,6 +556,20 @@ describe('coord label mutation is best-effort (#34)', () => {
     })
   }
 
+  it('collapses the warning to one line and prefers gh stderr over the exec prefix', async () => {
+    const { coord } = harness()
+    const res = await coord.claim(34, { plan: 'p' })
+    assert.ok(res.labelWarning, 'this arm needs a warning to describe')
+    assert.ok(
+      !res.labelWarning.includes('\n'),
+      `a multi-line warning escapes the CLI's leading decoration: ${res.labelWarning}`,
+    )
+    assert.ok(
+      !res.labelWarning.includes('Command failed'),
+      `the redundant execFileSync preamble should lose to gh's own stderr: ${res.labelWarning}`,
+    )
+  })
+
   it('done still closes the issue when the label edit fails', async () => {
     const { coord, closed } = harness()
     const res = await coord.done(34, { text: 'attested' })
