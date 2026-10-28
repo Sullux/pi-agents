@@ -193,7 +193,17 @@ The same verbs settle ownership: if you want part of a claimed issue,
 ```bash
 $COORD review 12 --pr https://github.com/Sullux/pitcairn-portal/pull/9   # PR opened
 $COORD done 12 --pr https://github.com/Sullux/pitcairn-portal/pull/9     # PR merged
+$COORD done 12 --pr 9 "shipped at abc1234, lane 206/206"                  # with an attestation
 ```
+
+A trailing message is appended to the **DONE** comment body, and the command names its
+character count on a second stdout line. Before #31 the `done` branch read no message
+positional at all - `review` and `status` did, three lines above it, which is what made
+the shape so easy to believe - so `done 12 --pr 9 "<verification table>"` exited 0 and
+posted a header-only **DONE**. The attestation you thought you filed was gone, and only
+re-reading the comment body showed it. That is the same trap the paragraph above
+describes, one level down: not that success overstates the gates, but that success can
+carry no payload at all.
 
 Put `Closes #12` in the PR body so GitHub links it. Before `review`, compare
 the PR's changed paths with the union of `## Files` for every linked issue.
