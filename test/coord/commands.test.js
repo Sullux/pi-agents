@@ -540,6 +540,11 @@ describe('coord label mutation is best-effort (#34)', () => {
       const { coord, commented, edited } = harness()
       const res = await call(coord)
       assert.equal(res.ok, true, `${name} recorded its protocol event`)
+      assert.equal(
+        commented.length,
+        1,
+        `exactly one ${marker} comment - box 4's ordering hazard, and a retry would post the second`,
+      )
       assert.ok(
         commented[0].body.startsWith(marker),
         `the ${marker} comment was written before gh refused`,
