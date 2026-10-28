@@ -113,6 +113,63 @@ describe('coord hub placeholder refusal (#29 guard 1)', () => {
     refuses('  FIXME the hub stamp', 'a leading FIXME')
   })
 
+  // #35: naming the FORM alone left the author hunting for which substring tripped, while
+  // the same message tells them to wrap a quoted token in backticks - so the echo turns a
+  // guess into one keystroke. The form string must survive too, because the arms above
+  // assert `includes(<form>)` and a refactor that prints only the match is a regression.
+  it('echoes the matched substring, not just the form it belongs to', () => {
+    for (const [text, form, match] of [
+      [
+        'delta: posted at 17:1xZ (patched)',
+        'an unreplaced time token',
+        '17:1xZ',
+      ],
+      ['17:0X wave two merged', 'an unreplaced time token', '17:0X'],
+      ['wave XX ships after the freeze', 'a bare XX', 'XX'],
+      ['verified at <sha> on main', 'a <sha> template slot', '<sha>'],
+      ['TODO rebase onto main', 'a leading TODO', 'TODO'],
+    ]) {
+      const res = hubText({}, text)
+      assert.ok(
+        res.error.includes(form),
+        `${form} must still be named: ${res.error}`,
+      )
+      assert.ok(
+        res.error.includes(match),
+        `the refusal must echo ${match} from ${text}, got: ${res.error}`,
+      )
+    }
+  })
+
+  // The scope sentence is a coverage claim, so it is asserted here rather than trusted from
+  // a comment: an agent whose multi-line body passes must be able to see WHY it passed.
+  it('states that only the first line is scanned', () => {
+    const res = hubText({}, '17:0X wave two merged')
+    assert.ok(
+      res.error.includes('only the FIRST line is inspected'),
+      `the refusal must declare its own scope, got: ${res.error}`,
+    )
+  })
+
+  // The gap the scope sentence promises is real, and pinning it is what keeps the sentence
+  // honest: widening the scan to the whole body reddens THIS arm, so the design decision
+  // gets re-litigated in a test failure instead of rotting silently.
+  it('posts a body whose unread token sits below line 1 - documented, not silent', () => {
+    const res = hubText(
+      {},
+      '**SYNC** | agent: agent-echo\n\nstamped 17:0X by mistake',
+    )
+    assert.equal(
+      res.error,
+      undefined,
+      'line-1-only scope is the whole reason this still posts',
+    )
+    assert.ok(
+      res.text.includes('17:0X'),
+      'the token is not stripped, only un-inspected',
+    )
+  })
+
   // The direction that decides whether this guard survives a week. Measured false
   // positive it must not reproduce: a `[0-9]{2}:[0-9]{2}Z` scan of a teammate's hub
   // body returned SEVEN "invalid stamps" (59:31Z, 26:03Z, 57:58Z ...), every one the
@@ -193,5 +250,28 @@ describe('ensureStamp owns only the leading token (#29 guard 2)', () => {
   it('never mistakes a timestamp inside the body for the leading stamp', () => {
     const res = ensureStamp(`${SYNC}\n\nmerged at 15:26:03Z`, clock)
     assert.equal(res.text, `${SYNC}\n\n16:00Z merged at 15:26:03Z`)
+  })
+
+  // #35: `stampOfUtc` always emits two digits, so `^(\d{2}):` made a hand-typed `9:58Z`
+  // invisible to the recognizer and the guard prepended its own stamp - `16:00Z 9:58Z my
+  // line`. Recognizing the short hour keeps the author's time; the range check has to keep
+  // working at one digit, or the fix would launder `9:99Z` into a valid stamp.
+  it('recognizes a one-digit hour and keeps it instead of double-stamping', () => {
+    for (const body of [
+      '9:58Z my line',
+      '09:58Z my line',
+      '9:58:12Z my line',
+    ]) {
+      const res = ensureStamp(`${SYNC}\n\n${body}`, clock)
+      assert.equal(
+        res.text,
+        `${SYNC}\n\n${body}`,
+        `${body} must not gain a second stamp`,
+      )
+    }
+    const bad = ensureStamp(`${SYNC}\n\n9:99Z bogus`, clock)
+    assert.equal(bad.text, undefined)
+    assert.ok(bad.error.includes('"9:99Z"'), bad.error)
+    assert.ok(bad.error.includes('nothing was posted'), bad.error)
   })
 })
