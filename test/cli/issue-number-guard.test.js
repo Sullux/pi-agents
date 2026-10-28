@@ -185,6 +185,7 @@ describe('#13 the coord service cannot reach a gh write with a bad number', () =
   const serviceWith = () => {
     const calls = []
     const github = {
+      issueKind: async () => ({ isPullRequest: false }),
       viewIssue: async (n) => {
         calls.push(['viewIssue', n])
         return {

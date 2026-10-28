@@ -50,6 +50,41 @@ const GitHubClient = ({
     return result?.toString()?.trim() || ''
   }
 
+  // #30: GitHub numbers issues and pull requests in ONE sequence, and `gh issue view` answers a PR
+  // number with a PR's data (a pull request IS an issue in the API), so a coord verb could stamp a
+  // protocol comment and a status label onto a merged PR - measured twice on pitcairn (a **REVIEW**
+  // landing on PR #1138 while issue #1136 got nothing; a second one re-opening merged PR #1110).
+  // The kind is NOT available from `gh issue view --json`: measured `Unknown JSON field:
+  // "pull_request"` and `"isPullRequest"` at f34349b. It lives on the raw API object, where the
+  // `pull_request` key exists exactly for PRs - so this goes through `gh api`, which is also the one
+  // gh subcommand that refuses `--repo` (measured: `unknown flag: --repo` + the whole help text),
+  // hence a separate spawn that carries the resolved slug in the endpoint path instead.
+  const ghApi = async (endpoint, jq) => {
+    const result = execFile('gh', ['api', endpoint, '--jq', jq], {
+      cwd,
+      encoding: 'utf8',
+      maxBuffer: GH_MAX_BUFFER,
+    })
+    return result?.toString()?.trim() || ''
+  }
+
+  // Returns `{ isPullRequest, title, body }` for the number, or `undefined` when gh errors or the
+  // payload will not parse - an unresolvable number is NOT reported as a pull request, because the
+  // verbs already fail loudly on their own read of it and this guard's job is only to stop a write
+  // that would land on the wrong kind of artifact.
+  const issueKind = async (number) => {
+    try {
+      return JSON.parse(
+        await ghApi(
+          `repos/${activeRepo}/issues/${number}`,
+          '{isPullRequest: (.pull_request != null), title, body}',
+        ),
+      )
+    } catch {
+      return undefined
+    }
+  }
+
   const listIssues = async (options = {}) => {
     const state = options.state || 'open'
     const limit = options.limit || 100
@@ -126,6 +161,7 @@ const GitHubClient = ({
   return {
     repo: activeRepo,
     runGh,
+    issueKind,
     listIssues,
     viewIssue,
     commentIssue,
