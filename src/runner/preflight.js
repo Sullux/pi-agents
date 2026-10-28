@@ -1,4 +1,4 @@
-const { isMine } = require('../coord/owner')
+const { isMine, cleanAgent } = require('../coord/owner')
 
 const NON_ACTIONABLE_LABELS = [
   'hub',
@@ -12,6 +12,55 @@ const NON_ACTIONABLE_LABELS = [
 const isActionableUnclaimed = (issue) => {
   const labelNames = (issue.labels || []).map((l) => l.name)
   return !labelNames.some((l) => NON_ACTIONABLE_LABELS.includes(l))
+}
+
+const isPrAuthoredByAgent = (pr, agent, myOwnedIssues = []) => {
+  const norm = cleanAgent(agent)
+  if (!norm) return false
+
+  const myNums = new Set(myOwnedIssues.map((i) => i.number))
+  if (
+    pr.closingIssuesReferences?.some((ref) => myNums.has(ref?.number || ref))
+  ) {
+    return true
+  }
+
+  for (const num of myNums) {
+    if (
+      pr.headRefName?.includes(String(num)) ||
+      pr.title?.includes(`#${num}`) ||
+      pr.title?.includes(`(${num})`)
+    ) {
+      return true
+    }
+  }
+
+  if (pr.comments?.length) {
+    const pat = new RegExp(
+      `(?:\\(agent-${norm},?\\s*the author\\)|agent:\\s*(?:agent-)?${norm}\\s*\\(author\\))`,
+      'i',
+    )
+    if (pr.comments.some((c) => pat.test(c.body || ''))) return true
+  }
+
+  return false
+}
+
+const isPrReviewedByAgent = (pr, agent) => {
+  const norm = cleanAgent(agent)
+  if (!norm || !pr.comments?.length) return false
+
+  const shortSha = pr.headRefOid ? pr.headRefOid.slice(0, 7) : ''
+  const revPat = new RegExp(
+    `\\*\\*(?:REVIEW|RE-ATTEST|APPROVE|BLOCK|RETRACTION)[^*]*\\*\\*\\s*\\|\\s*agent:\\s*(?:agent-)?${norm}\\b`,
+    'i',
+  )
+
+  return pr.comments.some((c) => {
+    const body = c.body || ''
+    if (!revPat.test(body)) return false
+    return shortSha ? body.includes(shortSha) : true
+  })
 }
 
 const checkBacklogAvailability = async ({ github, agent = '' }) => {
@@ -28,9 +77,9 @@ const checkBacklogAvailability = async ({ github, agent = '' }) => {
     }
   }
 
-  const myActiveClaims = nonHubIssues.filter(
-    (i) =>
-      isMine(i, agent) && !i.labels?.some((l) => l.name === 'status:in-review'),
+  const allMyIssues = nonHubIssues.filter((i) => isMine(i, agent))
+  const myActiveClaims = allMyIssues.filter(
+    (i) => !i.labels?.some((l) => l.name === 'status:in-review'),
   )
   if (myActiveClaims.length > 0) {
     return {
@@ -50,11 +99,17 @@ const checkBacklogAvailability = async ({ github, agent = '' }) => {
   }
 
   const openPrs = await github.listPrs()
-  if (openPrs.length > 0) {
+  const reviewablePrs = openPrs.filter(
+    (pr) =>
+      !isPrAuthoredByAgent(pr, agent, allMyIssues) &&
+      !isPrReviewedByAgent(pr, agent),
+  )
+
+  if (reviewablePrs.length > 0) {
     return {
       status: 'ready',
       reason: 'open_prs',
-      count: openPrs.length,
+      count: reviewablePrs.length,
     }
   }
 
@@ -67,4 +122,6 @@ const checkBacklogAvailability = async ({ github, agent = '' }) => {
 
 module.exports = {
   checkBacklogAvailability,
+  isPrAuthoredByAgent,
+  isPrReviewedByAgent,
 }

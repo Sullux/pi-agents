@@ -114,7 +114,7 @@ const GitHubClient = ({
       '--state',
       state,
       '--json',
-      'number,title,labels,headRefName,state',
+      'number,title,labels,headRefName,headRefOid,state,comments,closingIssuesReferences',
     ])
     try {
       return JSON.parse(raw)
