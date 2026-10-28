@@ -72,6 +72,43 @@ describe('every mutating verb names the resolved repo (#23)', () => {
     })
   }
 
+  // #44: `review` gained a second attestation line for the failed-label path, and #23's rule applies
+  // to it as well - a bare `REVIEW comment recorded on #21` would be the same cross-repo ambiguity
+  // that closed the wrong issue at 06:17 UTC. The double below returns a labelWarning, so this is the
+  // failure path, and the target must still terminate the line.
+  it('the failed-label review line still names the resolved repo (#44 x #23)', async () => {
+    const out = []
+    const cli = Cli({
+      github: { repo: 'Sullux/pi-agents' },
+      coordFactory: () => ({
+        review: async () => ({
+          ok: true,
+          labelWarning: "'status:in-review' not found",
+        }),
+      }),
+      provenance: { describe: () => 'DESCRIBE', note: () => '' },
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    })
+    assert.equal(
+      await cli.run(['coord', 'review', '21', 'verdict', '--pr', '9']),
+      0,
+    )
+    const honest = out.filter((l) =>
+      l.startsWith('REVIEW comment recorded on #21'),
+    )
+    assert.equal(honest.length, 1, out.join(' | '))
+    assert.ok(
+      honest[0].includes('@Sullux/pi-agents'),
+      `the target survives the new wording: ${honest[0]}`,
+    )
+    assert.equal(
+      out.filter((l) => l.startsWith('Moved #21')).length,
+      0,
+      `no transition attestation on a path where the label did not move: ${out.join(' | ')}`,
+    )
+  })
+
   it('a different target produces a different line (the suffix is not decoration)', async () => {
     const h = harness('Sullux/pitcairn-portal')
     assert.equal(await h.run(['coord', 'claim', '21']), 0)
