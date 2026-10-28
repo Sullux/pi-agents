@@ -2,6 +2,7 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { Cli } = require('../../src/cli')
 const { CoordService } = require('../../src/coord')
+const { USAGE } = require('../../src/coord/issueNumber')
 
 // pi-agents#31. `page coord done <issue> [--pr <n>] "<attestation>"` printed
 // `Marked #N done`, exited 0, and posted a HEADER-ONLY **DONE** line: the service has
@@ -182,5 +183,40 @@ describe('page coord done carries its message (#31)', () => {
     assert.equal(await h.run(['not-a-number', 'a message']), 1)
     assert.equal(h.posted.length, 0)
     assert.equal(h.closed.length, 0)
+  })
+})
+
+// pi-agents#36: #32's Done-when box 2 ("the usage line for `done` shows the message
+// positional it actually accepts") shipped in the code but was observed by nothing -
+// reverting BOTH usage strings left the suite 227/227, because issue-number-guard.test.js
+// asserts `USAGE[verb]` is truthy (presence, never content) and help-sinks.test.js pins its
+// own anchors. This arm reads the help text through the real Cli's injected sink (the
+// help-sinks shape) plus the exported map, so a stale usage string reddens instead of
+// teaching the next agent #31's mistake.
+describe('the done usage string advertises its payload (pi-agents#36)', () => {
+  it('the done usage line advertises the message positional', () => {
+    const out = []
+    const cli = Cli({
+      coordFactory: () => ({}),
+      provenance: { note: () => '', describe: () => 'D' },
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    })
+    cli.run(['coord', '--help'])
+    const line = out.find((l) => l.includes('coord done'))
+    assert.ok(
+      line,
+      `no done line reached the injected sink (got ${JSON.stringify(out).slice(0, 200)})`,
+    )
+    assert.match(
+      line,
+      /\[--pr <n>\] \[message\]/,
+      `help line does not advertise the payload: ${line}`,
+    )
+    assert.match(
+      USAGE.done,
+      /\[message\]/,
+      `USAGE.done is stale: ${USAGE.done}`,
+    )
   })
 })
