@@ -1,4 +1,5 @@
 const { cleanAgent, ownerOf, isMine } = require('./owner')
+const { isIssueNumber } = require('./issueNumber')
 const { parseScope, checkScopeCollision } = require('./scope')
 const { evaluateClaimRace } = require('./race')
 const { formatBoard, formatSync } = require('./formatters')
@@ -42,7 +43,22 @@ const CoordService = ({
     )
   }
 
+  // #13: this is the load-bearing half of the guard. The CLI prints a friendly usage
+  // line, but ANY caller of these five verbs - the shim, a future subcommand, a test
+  // double - must not be able to reach commentIssue/editIssue/closeIssue with a
+  // non-integer, because `NaN` turns into an issue IDENTIFIER in a board write rather
+  // than an error. `claim` died on a stack trace; `done` would have tried to close
+  // issue "NaN", which is a write, not a crash. The CLI refuses first, so a user sees
+  // the usage message and this message is what a non-CLI caller gets.
+  const invalidNumber = (number) => ({
+    ok: false,
+    error:
+      `invalid issue number ${String(number)}: coord verbs address exactly one ` +
+      'issue, given as a positive integer',
+  })
+
   const claim = async (number, { plan = '', eta = '' } = {}) => {
+    if (!isIssueNumber(number)) return invalidNumber(number)
     const issue = await github.viewIssue(number)
     if (!issue) return { ok: false, error: `Issue #${number} not found` }
 
@@ -114,6 +130,7 @@ const CoordService = ({
   }
 
   const release = async (number, { reason = '' } = {}) => {
+    if (!isIssueNumber(number)) return invalidNumber(number)
     const commentBody = `**RELEASE** | agent: agent-${cleanCurrent} | reason: ${reason || 'unspecified'}`
     await github.commentIssue(number, commentBody)
     await github.editIssue(number, {
@@ -124,12 +141,14 @@ const CoordService = ({
   }
 
   const status = async (number, message = '') => {
+    if (!isIssueNumber(number)) return invalidNumber(number)
     const commentBody = `**STATUS** | agent: agent-${cleanCurrent} | at: ${now()}\n\n${message}`
     await github.commentIssue(number, commentBody)
     return { ok: true, number }
   }
 
   const review = async (number, { pr = '', text = '' } = {}) => {
+    if (!isIssueNumber(number)) return invalidNumber(number)
     const commentBody =
       `**REVIEW** | agent: agent-${cleanCurrent} | at: ${now()}` +
       (pr ? ` | pr: #${pr}` : '') +
@@ -149,6 +168,7 @@ const CoordService = ({
   }
 
   const done = async (number, { pr = '', text = '' } = {}) => {
+    if (!isIssueNumber(number)) return invalidNumber(number)
     const commentBody =
       `**DONE** | agent: agent-${cleanCurrent} | at: ${now()}` +
       (pr ? ` | pr: #${pr}` : '') +
