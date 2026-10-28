@@ -49,7 +49,7 @@ Coordination Commands:
   coord claim <issue> [--plan <p>]   Claim an issue
   coord release <issue> [--reason]   Release an issue claim
   coord status <issue> <text>        Post heartbeat progress update
-  coord done <issue> [--pr <n>]      Mark issue completed
+  coord done <issue> [--pr <n>] [message]   Mark issue completed (message is optional)
   coord hub <text>                   Post update to coordination hub
   coord hub --body-file <path>       Post update from a markdown file
   coord provenance                   Report which checkout and commit are running
@@ -546,12 +546,29 @@ const Cli = ({
       if (sub === 'done') {
         const num = requireIssueNumber('done', positionals[1])
         if (failed(num)) return 1
-        const res = await coord.done(num.value, { pr: flags.pr })
+        // #31: `review` and `status` both read positionals.slice(2) and forward it as
+        // the payload; `done` never did, so `coord done 1135 --pr 1137 "<verification
+        // table>"` printed `Marked #1135 done`, exited 0, and posted a header-only
+        // **DONE** line - the service always rendered `text` (it is `(text ? ...) : ''`
+        // in src/coord/index.js) and was simply unreachable from here. The drop was
+        // unconditional, not conditional on the issue already being closed, which is
+        // the wrong explanation I published for it before reading the dispatch.
+        const text = positionals.slice(2).join(' ').trim()
+        const res = await coord.done(num.value, { pr: flags.pr, text })
         if (!res.ok) {
           stderr(`Error: ${res.error}`)
           return 1
         }
         stdout(`Marked #${num.value} done @${target}`)
+        // A SECOND line, never an appended clause: repo-resolution.test.js asserts the
+        // success line byte-for-byte for every mutating verb, and #23 chose the
+        // end-of-line suffix shape precisely so three unrelated pins would not have to
+        // be loosened to fund a wording change.
+        if (text) {
+          stdout(
+            `Attached ${text.length}-character message to the DONE comment`,
+          )
+        }
         return 0
       }
     }

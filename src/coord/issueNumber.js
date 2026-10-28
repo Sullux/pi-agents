@@ -14,7 +14,7 @@ const USAGE = {
   release: 'release <issue> [--reason "<why>"]',
   status: 'status <issue> "<message>"',
   review: 'review <issue> --pr <n> "<verdict>"',
-  done: 'done <issue> [--pr <n>]',
+  done: 'done <issue> [--pr <n>] [message]',
 }
 
 // The mutating verbs all address one issue, so one rule covers all five: a real,
