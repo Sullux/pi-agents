@@ -493,6 +493,24 @@ const Cli = ({
           `  ! labels unchanged: ${res.labelWarning} - the protocol comment on this issue is the record`,
         )
       }
+      // #44: `reportLabels` is the only thing that knows whether the BOARD moved, and it used to run
+      // one line AFTER the attestation - so `Moved #28 to in-review` reached stdout (and an agent's
+      // grep) while the same run was about to admit the label never changed. The two verbs differ in
+      // what they attest, and the difference is measured at 73cc21f rather than assumed: `review`'s
+      // ONLY transition is the label (comment + editIssue, nothing else), so on a failed label write
+      // the transition line is false and gets replaced. `done` attests the CLOSE, and a failed close
+      // throws - `res.ok` is reachable only when closeIssue resolved - so its byte-pinned line stays
+      // true and simply waits for the caveat to land first. `claim` and `release` keep the old order:
+      // the action they name is the protocol comment, which landed regardless of the label (Rule C).
+      const reviewLine = (number, target, res) => {
+        if (!res.labelWarning) {
+          stdout(`Moved #${number} to in-review @${target}`)
+          return
+        }
+        stdout(
+          `REVIEW comment recorded on #${number} @${target} - no label moved, so the board still reads this issue as it did before`,
+        )
+      }
       if (sub === 'claim') {
         const num = requireIssueNumber('claim', positionals[1])
         if (failed(num)) return 1
@@ -554,8 +572,10 @@ const Cli = ({
           stderr(`Error: ${res.error}`)
           return 1
         }
-        stdout(`Moved #${num.value} to in-review @${target}`)
+        // #44: the caveat lands FIRST, then the attestation that cannot be read as a
+        // board move when the label did not move
         reportLabels(res)
+        reviewLine(num.value, target, res)
         return 0
       }
       if (sub === 'done') {
@@ -578,8 +598,10 @@ const Cli = ({
           stderr(`Error: ${res.error}`)
           return 1
         }
-        stdout(`Marked #${num.value} done @${target}`)
+        // #44: caveat first, then the byte-pinned line - `Marked #N done` attests the close,
+        // which really did happen (a failed close throws), unlike review's label-only transition
         reportLabels(res)
+        stdout(`Marked #${num.value} done @${target}`)
         // #28: the override has to leave a trace in the caller's own output, because on the shared
         // account nothing else attributes the close. `forced` is only true when the guard WOULD have
         // refused - a routine self-close stays one clean line.
