@@ -10,8 +10,11 @@ const { pad } = require('../coord/formatters')
 const { requireIssueNumber, requireMessage } = require('../coord/issueNumber')
 const { Provenance } = require('./selfcheck')
 
-const printHelp = () => {
-  console.log(`
+// #19: the usage path used to write to the GLOBAL console, so `Cli({ stdout })` could not see its
+// own help text and every `--help` render was unassertable in-process. The sink is a parameter with
+// the old global as its default, so a bare `printHelp()` still behaves as it did for a direct caller.
+const printHelp = (sink = console.log) => {
+  sink(`
 Usage: page <command> [subcommand] [args...] [flags]
 
 Global Flags:
@@ -78,7 +81,7 @@ const Cli = ({
     const { command, positionals, flags } = parseArgs(argv)
 
     if (command === 'help' || flags.help || flags.h) {
-      printHelp()
+      printHelp(stdout)
       return 0
     }
 
@@ -536,7 +539,7 @@ const Cli = ({
       }
     }
 
-    printHelp()
+    printHelp(stdout)
     return 1
   }
 
