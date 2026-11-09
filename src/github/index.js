@@ -10,6 +10,15 @@ const GH_MAX_BUFFER = 64 * 1024 * 1024
 // Named so a pin can assert the fix sits ABOVE the default, not merely that something was passed.
 const NODE_DEFAULT_MAX_BUFFER = 1024 * 1024
 
+// Named so a pin can assert the fix sits ABOVE the default, not merely that something was passed.
+// #85: `listIssues` asked for 100 rows and nothing compared the reply to that number. gh paginates
+// whatever it is handed (measured: `--limit 100|150|300` -> 100|150|300 rows), so 100 was OUR number,
+// and the missing tail arrived at the gate as "nobody declared that file" - the one verdict it must
+// never guess at. 500 clears today's population (4 open issues in pitcairn, 2 in pi-agents) by two
+// orders of magnitude, and hitting it is a loud refusal rather than a silent pass. The neighbour
+// lesson is #4's ENOBUFS, which at least THREW: a short list returns status 0 and a plausible board.
+const ISSUE_PAGE_CEILING = 500
+
 const resolveRepoFromRemote = (remoteUrl = '') => {
   const cleaned = remoteUrl.trim().replace(/\.git$/, '')
   const sshMatch = cleaned.match(/github\.com[:/]([^/]+\/[^/]+)/)
@@ -166,7 +175,7 @@ const GitHubClient = ({
 
   const listIssues = async (options = {}) => {
     const state = options.state || 'open'
-    const limit = options.limit || 100
+    const limit = options.limit || ISSUE_PAGE_CEILING
     const raw = runGh([
       'issue',
       'list',
@@ -177,11 +186,48 @@ const GitHubClient = ({
       '--json',
       'number,title,labels,comments,body',
     ])
-    try {
-      return JSON.parse(raw)
-    } catch {
-      return []
+    // The old `catch { return [] }` was the bug, not the guard. Four degraded shapes all landed in it
+    // and each one emptied the collision set: empty stdout, an `<html>Server Error</html>` body,
+    // truncated JSON, and - reachable with no catastrophe at all - one `warning:` line printed above
+    // valid JSON, because `runGh` only throws on a nonzero exit and the parse then fails on the blob.
+    // A caller handed `[]` cannot tell "no open issues" from "the read failed", and `listLabels` below
+    // already states the rule this site broke: an unreadable read is UNKNOWN, not absent.
+    const text = String(raw ?? '').trim()
+    const unreadable = (detail) =>
+      new Error(
+        `coord: gh issue list returned unreadable output for ${activeRepo || 'the resolved repo'} - ${detail}. ` +
+          'The open-issue set is UNKNOWN, not empty: a silent [] here empties the scope gate and lets ' +
+          'every claim through, so this refuses instead.',
+      )
+    if (!text.startsWith('[')) {
+      throw unreadable(
+        text
+          ? `readout is not JSON: starts with ${JSON.stringify(text.slice(0, 2))} across ${text.length} bytes`
+          : 'empty stdout',
+      )
     }
+    let parsed
+    try {
+      parsed = JSON.parse(text)
+    } catch (err) {
+      throw unreadable(
+        `JSON parse failed (${errorCause(err)}) after ${text.length} bytes`,
+      )
+    }
+    if (!Array.isArray(parsed))
+      throw unreadable(`parsed a ${typeof parsed}, not an array`)
+    // Exactly-at-cap is the only truncation signal a list can give, so it is treated as one and named
+    // with its remedy. Below the cap the set is complete and says nothing - tagging every call would
+    // cry wolf the way the `withFullTimelines` header warns about for the comment axis.
+    if (parsed.length === limit) {
+      throw new Error(
+        `coord: gh issue list returned exactly ${limit} issues for ${activeRepo || 'the resolved repo'}, ` +
+          'so the open set is TRUNCATED and the tail is invisible to the scope gate - raise ' +
+          `ISSUE_PAGE_CEILING (currently ${ISSUE_PAGE_CEILING})` +
+          ' or pass a larger options.limit. A missed collision is worse than a refused claim.',
+      )
+    }
+    return parsed
   }
 
   // #53 review ask: the hub refusal advised `label one issue 'hub'` in repos whose taxonomy has no
@@ -269,4 +315,5 @@ module.exports = {
   GitHubClient,
   GH_MAX_BUFFER,
   NODE_DEFAULT_MAX_BUFFER,
+  ISSUE_PAGE_CEILING,
 }
