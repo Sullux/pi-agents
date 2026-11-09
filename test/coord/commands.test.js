@@ -337,15 +337,30 @@ describe('Coordination Protocol: label-shape contract (#15)', () => {
     assert.ok(/^#42/m.test(str), 'non-vacuity: the work row is still there')
   })
 
-  it('falls back to unclaimed / - / - for empty labels under both shapes', () => {
+  it('derives STATUS from the timeline for a label-less issue under both shapes (#66)', () => {
     const { formatBoard } = require('../../src/coord/formatters')
     const obj = formatBoard([status([])], 'other')
     const str = formatBoard([status([])], 'other')
 
     assert.equal(obj, str)
+    // #66 rewrote this pin's assertion. The fixture carries EMPTY labels *and* a live
+    // `**CLAIM** | agent: alpha`, so `unclaimed` was never a measurement - it was statusOf's
+    // fallback firing on an issue that is demonstrably not free. The no-throw / both-shapes-agree
+    // intent this pin was written for (#15) is preserved above; the cell itself now tells the truth.
+    // `includes('claimed')` alone is vacuous - `unclaimed` contains it. Assert the absence too, or
+    // this arm passes on the exact bug it was rewritten to rule out (measured: reverting the cell to
+    // label-only left this arm green until the second half was added).
     assert.ok(
-      obj.includes('unclaimed'),
-      'an absent status label still defaults, not throws',
+      obj.includes('claimed') && !obj.includes('unclaimed'),
+      'a label-less issue holding a CLAIM must not read as free',
+    )
+    assert.ok(
+      obj.includes('alpha'),
+      'the OWNER cell is unchanged, so both columns now agree',
+    )
+    assert.ok(
+      !obj.includes('in-progress'),
+      'derivation must not invent a state the timeline never claimed',
     )
   })
 
