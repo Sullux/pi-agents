@@ -21,7 +21,8 @@ const issue = (...bodies) => ({ comments: comment(...bodies) })
 
 describe('owner.js: identity-field parsing (#49)', () => {
   it('the tool-authored shape still resolves, and is not re-parsed by the fallback', () => {
-    const body = '**CLAIM** | agent: agent-delta | human: @Sullux | at: 1700000000000'
+    const body =
+      '**CLAIM** | agent: agent-delta | human: @Sullux | at: 1700000000000'
     assert.match(body, STRICT)
     assert.equal(agentOf(body), 'delta')
     assert.equal(ownerOf(issue(body)), 'delta')
@@ -29,13 +30,15 @@ describe('owner.js: identity-field parsing (#49)', () => {
   })
 
   it('an extra |-field before the agent field resolves to the claimer', () => {
-    const body = '**CLAIM** | ref: "agent: agent-echo" | agent: agent-delta | at: 1'
+    const body =
+      '**CLAIM** | ref: "agent: agent-echo" | agent: agent-delta | at: 1'
     assert.equal(agentOf(body), 'delta')
     assert.equal(ownerOf(issue(body)), 'delta')
   })
 
   it('the agent field on a continuation line resolves (#49 probe row two)', () => {
-    const body = '**CLAIM** | ref: "agent: agent-echo"\nagent: agent-delta | at: 1'
+    const body =
+      '**CLAIM** | ref: "agent: agent-echo"\nagent: agent-delta | at: 1'
     assert.equal(
       body.match(STRICT),
       null,
@@ -110,7 +113,10 @@ describe('owner.js: an unreadable identity cannot free the issue (#49)', () => {
     )
     assert.equal(
       ownerOf(
-        issue('**CLAIM** | agent: agent-delta', '**RELEASE** | lost claim race to agent-bravo'),
+        issue(
+          '**CLAIM** | agent: agent-delta',
+          '**RELEASE** | lost claim race to agent-bravo',
+        ),
       ),
       '',
       'the documented unattributed-close-out clears: race.js relies on it and three pins do too',
@@ -134,7 +140,10 @@ describe('owner.js: an unreadable identity cannot free the issue (#49)', () => {
 
 describe('owner.js: unresolvedProtocolLines is a real witness', () => {
   it('returns empty when every marker resolves - and fires on the shapes that do not', () => {
-    const good = issue('**CLAIM** | agent: agent-delta', '**RELEASE** | agent: agent-delta')
+    const good = issue(
+      '**CLAIM** | agent: agent-delta',
+      '**RELEASE** | agent: agent-delta',
+    )
     assert.deepEqual(unresolvedProtocolLines(good.comments), [])
     assert.equal(
       unresolvedProtocolLines(good.comments).length,
@@ -153,7 +162,10 @@ describe('owner.js: unresolvedProtocolLines is a real witness', () => {
       unresolvedProtocolLines(issue('**RELEASE** | lost the race').comments),
       [],
     )
-    assert.deepEqual(unresolvedProtocolLines(issue('**DONE** | pr: #9').comments), [])
+    assert.deepEqual(
+      unresolvedProtocolLines(issue('**DONE** | pr: #9').comments),
+      [],
+    )
   })
 })
 
