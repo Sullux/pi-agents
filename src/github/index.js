@@ -260,6 +260,14 @@ const GitHubClient = ({
   const commentIssue = async (number, body) =>
     runGh(['issue', 'comment', String(number), '--body', body])
 
+  // #87: `coord review --pr` has to put the verdict where it is read, which is the PR
+  // thread. This is NOT a reuse of commentIssue above: `gh issue comment` refuses a
+  // pull-request number, so the verb itself differs. Same argv shape on purpose - the
+  // body travels as an argument, never as `-` (which posts the literal two-character
+  // body) and never as `@file` (only -F expands that).
+  const commentPr = async (number, body) =>
+    runGh(['pr', 'comment', String(number), '--body', body])
+
   const editIssue = async (
     number,
     { addLabels = [], removeLabels = [] } = {},
@@ -303,6 +311,7 @@ const GitHubClient = ({
     listLabels,
     viewIssue,
     commentIssue,
+    commentPr,
     editIssue,
     closeIssue,
     createIssue,
