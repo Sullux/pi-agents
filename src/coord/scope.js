@@ -22,6 +22,14 @@ const SPLIT_LINE = /^(\^)?split:/i
 // `-->` on the following line when an author opens `<!--` and closes it later, and that token
 // starts with none of the prefixes the filter knows, so it would be compared as a declared path.
 const COMMENT_FRAGMENT = /^(<!--|-->)/
+// #81: a block-quoted line inside the Files section is documentation, not a declaration - it has the
+// same status as a path inside a fenced example (#816) - but `>` was in none of the prefixes this
+// filter knew, so an author's intent note became a scope ENTRY. Measured live on pitcairn #1182:
+// its Files section returned 2 entries where exactly one is a path, the other being
+// `> Box 1 stays unticked on purpose: ...`, and `page coord board` printed that sentence in the
+// FILES column as if it were a file. The rule is a LINE PREFIX, not a character rule: a `>` inside
+// a path is that path's business, and `> src/a.js` is a quoted path, which is a note about a path.
+const BLOCKQUOTE = /^>/
 // #26: a setext underline is heading punctuation, never a path. Measured before the fix: a body
 // with an ATX `## Files` followed by a setext `Notes` + `----` returned
 // ["src/a.js", "Notes", "-----", "y"] - three junk paths from three prose lines, and a `-----`
@@ -34,6 +42,7 @@ const NOT_A_PATH = (path) =>
   path.startsWith('_(') ||
   path.startsWith('#') ||
   UNDERLINE_TOKEN.test(path) ||
+  BLOCKQUOTE.test(path) ||
   SPLIT_LINE.test(path) ||
   COMMENT_FRAGMENT.test(path)
 
