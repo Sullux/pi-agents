@@ -205,6 +205,41 @@ test('box 3: --pr stays a legitimate pull-request number (the guard checks the p
   )
 })
 
+test('box 3b: done keeps --pr a legitimate pull-request number (the guard checks the positional only)', async () => {
+  // #60: box 3 made the flag contract falsifiable for `review`, but `done` takes the same
+  // flag (`page coord done 30 --pr 48`) and had no arm. Measured on main at da2d87a: adding
+  // `if (pr) refuseIfPullRequest('done', pr)` after done's own early return reddened nothing
+  // - guard file 11/11, full lane 331/331 - because callEach only ever exercises `done` under
+  // the flat flag, where the positional and the flag answer identically. This arm uses the
+  // per-number fixture so the flag number really resolves as a pull request, and a guard that
+  // kind-checks it gets caught.
+  const github = recorder({ isPullRequest: false, prNumbers: ['47', 51] })
+  const coord = serviceOver(github)
+  const res = await coord.done(21, { pr: '47' })
+  assert.notEqual(
+    res.ok,
+    false,
+    'done with a real PR number in --pr must still work',
+  )
+  // The integer form too, for the reason box 3 carries it: the CLI hands over a string and a
+  // programmatic caller hands over a number, and normalization is the half that rots first.
+  const resInt = await coord.done(21, { pr: 51 })
+  assert.notEqual(
+    resInt.ok,
+    false,
+    'a pull-request number given as an integer is still legal usage',
+  )
+  assert.ok(
+    github.writes.some((w) => w[0] === 'comment' && w[2].includes('pr: #47')),
+    'and the PR reference survives into the **DONE** comment, not just the return value',
+  )
+  assert.match(
+    USAGE.done,
+    /^done <issue>/,
+    'the usage line names the positional as an issue, same shape as review',
+  )
+})
+
 test('the #13 guards still hold unchanged (NaN, 0, 13.5, missing positional)', async () => {
   const github = recorder({ isPullRequest: false })
   const coord = serviceOver(github)
