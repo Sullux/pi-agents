@@ -1,4 +1,10 @@
-const { cleanAgent, ownerOf, isMine, hasClaimBy } = require('./owner')
+const {
+  cleanAgent,
+  ownerOf,
+  isMine,
+  hasClaimBy,
+  unresolvedProtocolLines,
+} = require('./owner')
 const { isIssueNumber, pullRequestRefusal } = require('./issueNumber')
 const {
   parseScope,
@@ -83,6 +89,62 @@ const CoordService = ({
       ? { ok: false, error: pullRequestRefusal(sub, number, kind) }
       : null
   }
+
+  // #52: winning a race and being READABLE are two different facts, and today only the first one
+  // is checked. evaluateClaimRace answers "did anybody claim this before me" and returns won:true
+  // when it cannot see ANY live claim - so a CLAIM whose marker is not the first token of the body
+  // (a paste that brought a `>`, a BOM, prose before the marker) or a rival line that lands between
+  // the write and the refresh lets the tool print `Claimed #N` while ownerOf, the half the board and
+  // the scope gate both read, answers "nobody" or names somebody else. Measured shapes, every one
+  // { won: true, owner: not me }: my claim + a bystander's RELEASE with no agent field; my claim + my
+  // own signed RELEASE; a `>`-pasted claim; my claim then a DONE quoting another agent in prose; and
+  // my claim + a rival CLAIM with a LATER timestamp (the race is earliest-wins, ownership is
+  // last-word-wins, so the two can genuinely disagree inside one refresh). The comment IS on GitHub
+  // either way, which is why the remedy is branched: re-posting a line a rival already overwrote
+  // would re-arm the race, and #49's unresolvedProtocolLines is deliberately named here because it
+  // CANNOT see four of those five shapes (it only inspects lines whose marker parses) - the two
+  // halves are complementary, and the message says which one stayed silent.
+  const verifyPostedClaim = (refreshedIssue, number, postedBody) => {
+    const owner = ownerOf(refreshedIssue)
+    if (owner === cleanCurrent) return null
+    const unresolved = unresolvedProtocolLines(refreshedIssue.comments || [])
+    const shape = JSON.stringify(`${postedBody}`.slice(0, 44))
+    const comments = (refreshedIssue.comments || []).map((c) =>
+      `${c.body}`.trim(),
+    )
+    const echoed = comments.includes(`${postedBody}`.trim())
+    const parsed = owner ? `agent-${owner}` : 'nobody'
+    const detector = unresolved.length
+      ? `#49's unresolvedProtocolLines named ${unresolved.length} line(s) with no readable agent field`
+      : `#49's unresolvedProtocolLines found nothing: it flags only lines with NO agent field, and this line has a field it can read`
+    // Two causes remain, and the discriminator is `owner`, not `echoed`: a rival line that
+    // lands after mine leaves MY body in the read too, so "present" cannot tell the two apart, and
+    // the remedies are opposite (stand down vs re-read).
+    const cause = owner
+      ? `the last protocol word on the timeline is ${parsed}'s, not yours, so the board says ${owner} holds it (ownership is last-word-wins while the race is earliest-wins, and one refresh can show both, mine intact). STAND DOWN per Rule C and write NOTHING, because a second CLAIM re-arms a race you already lost`
+      : `your line is not in the read and nobody holds #${number} (${comments.length} comment(s) read), so either the read answered before the write landed or the issue has more comments than this path returns - the 100-comment ceiling that withFullTimelines exists for. RE-READ before you write anything: gh api "repos/${github.repo || '<owner>/<repo>'}/issues/${number}/comments" --paginate -q '.[].body' | tail -5, and re-post only once you have seen the line genuinely absent`
+    return {
+      ok: false,
+      number,
+      owner,
+      echoed,
+      unresolved,
+      postedBody,
+      error: `coord claim: #${number} was written but does not resolve to agent-${cleanCurrent} after re-reading its own timeline - ${cause}. ${detector}.`,
+    }
+  }
+
+  // #52, the half that runs BEFORE the write: the identity going into the CLAIM line has to be
+  // readable by the same parser the board uses, or the post is a phantom owner. Measured: an empty
+  // COORD_AGENT writes `agent: agent-`, which unresolvedProtocolLines flags and ownerOf answers
+  // "nobody" for, while claim still reported success because both sides of the comparison were the
+  // empty string. Compose the body, ask #49's detector whether that exact line would resolve to
+  // anything, and refuse without writing - nothing is stamped, so there is nothing to unwind
+  // (#48's discipline: the guard's job is to stop the write, not to reinterpret it afterwards).
+  const postedLineWouldResolve = (commentBody) =>
+    Boolean(cleanCurrent) &&
+    ownerOf({ comments: [{ body: commentBody }] }) === cleanCurrent &&
+    unresolvedProtocolLines([{ body: commentBody }]).length === 0
 
   // #34: the protocol comment IS the record; labels are decoration, and a repo can simply
   // not have the taxonomy - pi-agents carries zero status:* labels, measured. Two gh refusals
@@ -181,6 +243,15 @@ const CoordService = ({
       `plan: ${plan || '_(none given)_'}\neta: ${eta || '_(none given)_'}` +
       warningNote
 
+    // #52: refuse before the write when my own line would not be attributable, so the
+    // board never has to discover an owner it cannot name.
+    if (!postedLineWouldResolve(commentBody)) {
+      return {
+        ok: false,
+        error: `coord claim: COORD_AGENT=${JSON.stringify(agent)} does not round-trip through the tool's own CLAIM field (agent-${cleanCurrent} would read back as ${JSON.stringify(ownerOf({ comments: [{ body: commentBody }] })) || 'nobody'}), so the board would show #${number} FREE - or name somebody else - while you believe you hold it, which is how the #238 pileups were funded. Set COORD_AGENT to a value with no pipe or newline and re-run; nothing was written.`,
+      }
+    }
+
     await github.commentIssue(number, commentBody)
     const labels = await applyLabels(number, {
       addLabels: ['status:claimed'],
@@ -198,6 +269,12 @@ const CoordService = ({
         error: `Lost simultaneous claim race to ${raceResult.earlierAgent}`,
       }
     }
+
+    // #52: the race above proves nobody beat you to it; this proves the line you just wrote is
+    // readable by the half of the tool that decides ownership. Runs AFTER the race, because a lost
+    // race has a more specific cause to report and must keep its own message.
+    const selfCheck = verifyPostedClaim(refreshed, number, commentBody)
+    if (selfCheck) return selfCheck
 
     return { ok: true, number, warnings, ...labels }
   }
