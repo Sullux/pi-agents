@@ -87,6 +87,18 @@ const ensureStamp = (text, now) => {
   return { text: `${head}${stampOfUtc(now)} ${rest}` }
 }
 
+// #27: a mistaken target argument became MESSAGE CONTENT. `page coord hub 4 --body-file f`
+// posted the file AND a trailing line holding just `4`, printed `Posted to hub #4 @…` and
+// exited 0 - and the number in that success line comes from `coord.hub()`'s return value, so
+// it describes where the comment went, never what was in it. Concatenation is #3's remedy for
+// a dropped part, and this is its cost: an argument that can only be a mistake still lands in
+// the body. Refusing is scoped to a positional that is NOTHING BUT a target token (`4`, `#4`)
+// while another source is present - `hub "4"` alone has no mistaken-target reading, the number
+// IS the message, and prose that merely starts with a digit (`4 agents merged today`) is the
+// shape #3 exists to preserve, so the predicate is numeric-lness of the whole token, not a
+// leading digit.
+const NUMERIC_TARGET_RE = /^#?\d+$/
+
 const HubText =
   (readFile) =>
   (flags = {}, positional = '') => {
@@ -94,6 +106,20 @@ const HubText =
     if (fileFlag === true)
       return { error: `--body-file needs a path\n${HUB_USAGE}` }
     if (flags.body === true) return { error: `--body needs text\n${HUB_USAGE}` }
+
+    const targetOnly = positional.trim()
+    if (
+      (typeof fileFlag === 'string' || typeof flags.body === 'string') &&
+      NUMERIC_TARGET_RE.test(targetOnly)
+    )
+      return {
+        error:
+          `hub takes no issue-number positional - \`${targetOnly}\` would have been posted ` +
+          'as message text alongside the file or --body. The hub is COORD_HUB (default 4) ' +
+          'and is not selectable per call; drop the number, or make it part of your ' +
+          'sentence. Nothing was posted.\n' +
+          HUB_USAGE,
+      }
 
     const parts = [
       typeof fileFlag === 'string' ? readFile(fileFlag) : '',

@@ -44,6 +44,54 @@ describe('coord hub text resolution (#3)', () => {
     assert.ok(res.text.includes('extra words here'), 'positional part survived')
   })
 
+  // #27: the other direction of the same concatenable field - an argument that can only be a
+  // mistaken TARGET used to be appended to the body and posted, under a success line whose
+  // number came from the hub lookup rather than from anything about the payload.
+  it('refuses a lone numeric positional alongside --body-file instead of appending it', () => {
+    const res = hubText({ 'body-file': '/tmp/x.md' }, '4')
+    assert.ok(
+      res.error?.includes('hub takes no issue-number positional'),
+      res.error,
+    )
+    assert.ok(
+      res.error.includes('`4`'),
+      'the refusal echoes the offending token',
+    )
+    assert.ok(
+      res.error.includes('Nothing was posted'),
+      'and says the write did not happen',
+    )
+    assert.equal(res.text, undefined, 'nothing resolves to post')
+  })
+
+  it('refuses the same shape through --body and in the #-prefixed form', () => {
+    for (const [flags, positional] of [
+      [{ 'body-file': '/tmp/x.md' }, '#4'],
+      [{ body: 'inline text' }, '4'],
+      [{ body: 'inline text' }, '#1155'],
+    ]) {
+      const res = hubText(flags, positional)
+      assert.ok(
+        res.error?.includes('hub takes no issue-number positional'),
+        `expected refusal for ${JSON.stringify({ flags, positional })}, got ${JSON.stringify(res)}`,
+      )
+    }
+  })
+
+  // The two boundaries that keep #3 whole: the refusal is about a target-shaped WHOLE token,
+  // so a numeric message with no other source posts, and prose beginning with a digit still
+  // concatenates. These arms pass on both sides of the fix by design - they are the fence.
+  it('still posts a numeric positional when it IS the whole message', () => {
+    assert.deepEqual(hubText({}, '4'), { text: '4' })
+  })
+
+  it('still concatenates prose that merely starts with a digit', () => {
+    const res = hubText({ 'body-file': '/tmp/x.md' }, '4 agents merged today')
+    assert.equal(res.error, undefined)
+    assert.ok(res.text.includes('the file body'), 'file part survived')
+    assert.ok(res.text.includes('4 agents merged today'), 'prose part survived')
+  })
+
   it('refuses a bare verb with no argument at all', () => {
     const res = hubText({}, '')
     assert.ok(res.error.includes(HUB_USAGE))
