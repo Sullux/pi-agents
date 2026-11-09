@@ -469,7 +469,12 @@ const Cli = ({
           stderr(posted.error)
           return 1
         }
-        stdout(`Posted to hub #${posted.hubNumber} @${target}`)
+        // #53: print the repo the POST went through, not this command's workspace
+        // client - the two resolve differently whenever the hub lives in another repo,
+        // which is how a write into pi-agents #4 reported success against pitcairn.
+        stdout(
+          `Posted to hub #${posted.hubNumber} @${posted.repo || 'unresolved (gh cwd default)'}`,
+        )
         return 0
       }
       // Every mutating verb below addresses one issue, and a missing positional

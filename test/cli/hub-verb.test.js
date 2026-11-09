@@ -19,7 +19,11 @@ describe('page coord hub (#3)', () => {
     const cli = Cli({
       coordFactory: ({ agent }) =>
         CoordService({
+          // #53: these arms drive the real hub() path, which now needs a listable
+          // target and a repo to name. Double fidelity; no assertion changed.
           github: {
+            repo: 'Sullux/pi-agents',
+            listIssues: async () => [{ number: 4, labels: [{ name: 'hub' }] }],
             commentIssue: async (num, body) => posted.push({ num, body }),
           },
           agent,
@@ -138,7 +142,11 @@ describe('page coord hub refuses an unread placeholder (#29 guard 1)', () => {
     const cli = Cli({
       coordFactory: ({ agent }) =>
         CoordService({
+          // #53: these arms drive the real hub() path, which now needs a listable
+          // target and a repo to name. Double fidelity; no assertion changed.
           github: {
+            repo: 'Sullux/pi-agents',
+            listIssues: async () => [{ number: 4, labels: [{ name: 'hub' }] }],
             commentIssue: async (num, body) => posted.push({ num, body }),
           },
           agent,
