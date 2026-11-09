@@ -519,6 +519,20 @@ const Cli = ({
       // throws - `res.ok` is reachable only when closeIssue resolved - so its byte-pinned line stays
       // true and simply waits for the caveat to land first. `claim` and `release` keep the old order:
       // the action they name is the protocol comment, which landed regardless of the label (Rule C).
+      // #87: the PR-thread write is reported FIRST of the caveats, matching the order the
+      // writes happen in, and - like #44's rule for the label line - always before the
+      // headline, so a verdict that did not reach the thread is heard there too.
+      const reportPrComment = (res) => {
+        if (res.prCommentWarning) {
+          stdout(
+            `  ! the issue comment is recorded but the PR thread was not: ${res.prCommentWarning}`,
+          )
+          return
+        }
+        if (!res.prCommented) return
+        stdout(`  · verdict also signed on PR #${res.prCommented} (#87)`)
+      }
+
       const reviewLine = (number, target, res) => {
         // #79: `labelNotice` belongs in this test alongside `labelWarning`. #44's rule is that
         // `review`'s ONLY transition is the label, so a run that skipped the write has not moved
@@ -597,6 +611,7 @@ const Cli = ({
         }
         // #44: the caveat lands FIRST, then the attestation that cannot be read as a
         // board move when the label did not move
+        reportPrComment(res)
         reportLabels(res)
         reviewLine(num.value, target, res)
         return 0

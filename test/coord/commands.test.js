@@ -245,6 +245,7 @@ describe('Coordination Protocol: Service Methods', () => {
       commentIssue: async (num, body) => {
         commented.push({ num, body })
       },
+      commentPr: async () => '',
       editIssue: async (num, edits) => {
         edited.push({ num, edits })
       },
@@ -621,6 +622,7 @@ describe('coord label mutation is best-effort (#34)', () => {
         commentIssue: async (num, body) => {
           commented.push({ num, body })
         },
+        commentPr: async () => '',
         editIssue: async (num, edits) => {
           edited.push({ num, edits })
           if (fail) {
@@ -791,6 +793,7 @@ describe('#28 done refuses to close an issue the caller does not hold', () => {
         writes.push('comment')
         return { html_url: 'https://example.test/c' }
       },
+      commentPr: async () => '',
       editIssue: async () => {
         writes.push('edit')
         return {}

@@ -330,6 +330,33 @@ const CoordService = ({
   // precondition here. `done` below is different in kind: it DESTROYS the board state another
   // agent is working against (closes the issue and strips its status label), which is why it
   // refuses by default. Anyone tempted to "fix" the asymmetry should read that sentence first.
+  // #87: the issue comment is the protocol record, but a verdict is READ on the PR thread,
+  // and on a shared account `gh pr comment` carries no author signal at all - so a manual
+  // APPROVE is a claim with no claimant, which is #83's disease on the other surface. The
+  // tool signs both. Order matters here: the issue write happens FIRST and a PR failure can
+  // never undo it, so this helper runs after it. It also must not read as a clean success -
+  // that is #34's contract for labels, reused rather than reinvented, hence a distinct field
+  // the CLI prints instead of a thrown error.
+  const commentVerdictOnPr = async (pr, body) => {
+    if (!pr) return {}
+    // A missing seam is a programming error, not a runtime outcome, and it sits OUTSIDE the
+    // try below on purpose: caught, it becomes `{ prCommentWarning: 'github.commentPr is not
+    // a function' }`, which every existing arm ignores, so the whole suite reads green while
+    // no verdict ever reaches a PR thread. Measured: 457/457 with a bare try. The catch is for
+    // gh refusing a real write, which is a fact the CLI has to report.
+    if (typeof github.commentPr !== 'function')
+      throw new TypeError(
+        'coord review --pr needs github.commentPr on the injected client (#87)',
+      )
+    try {
+      await github.commentPr(pr, body)
+      return { prCommented: pr }
+    } catch (error) {
+      const detail = String(error?.stderr || error?.message || error)
+      return { prCommentWarning: detail }
+    }
+  }
+
   const review = async (number, { pr = '', text = '' } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
     const notAnIssue = await refuseIfPullRequest('review', number)
@@ -339,6 +366,7 @@ const CoordService = ({
       (pr ? ` | pr: #${pr}` : '') +
       (text ? `\n\n${text}` : '')
     await github.commentIssue(number, commentBody)
+    const prResult = await commentVerdictOnPr(pr, commentBody)
     const issue = await github.viewIssue(number)
     const labels = await applyLabels(number, {
       addLabels: ['status:in-review'],
@@ -347,7 +375,7 @@ const CoordService = ({
       ),
       issue,
     })
-    return { ok: true, number, ...labels }
+    return { ok: true, number, ...labels, ...prResult }
   }
 
   const done = async (number, { pr = '', text = '', force = false } = {}) => {
