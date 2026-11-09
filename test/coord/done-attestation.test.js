@@ -12,7 +12,9 @@ const build = (body, { agent = 'delta' } = {}) => {
     number: 50,
     body,
     labels: [{ name: 'status:claimed' }],
-    comments: [{ body: `**CLAIM** | agent: agent-${agent} | at: 1700000000000` }],
+    comments: [
+      { body: `**CLAIM** | agent: agent-${agent} | at: 1700000000000` },
+    ],
   }
   const commented = []
   const edited = []
@@ -39,7 +41,8 @@ const build = (body, { agent = 'delta' } = {}) => {
   return { coord, commented, edited, closed }
 }
 
-const UNATTENDED = '## Goal\ng\n\n## Done when\n- [x] measured\n- [ ] not measured\n- [ ] also not\n\n## Files\nsrc/foo.js\n'
+const UNATTENDED =
+  '## Goal\ng\n\n## Done when\n- [x] measured\n- [ ] not measured\n- [ ] also not\n\n## Files\nsrc/foo.js\n'
 const ALL_TICKED = '## Done when\n- [x] one\n- [x] two\n'
 const NUMBERED_ONLY = '## Done when\n1. first\n2. second\n'
 const NO_SECTION = '## Goal\ng\n\n## Files\nsrc/foo.js\n'
@@ -49,27 +52,56 @@ describe('done (close requires an attestation, #94)', () => {
     const { coord, commented, edited, closed } = build(UNATTENDED)
     const res = await coord.done(50, {})
     assert.equal(res.ok, false, 'an unattested close must not report success')
-    assert.match(res.error, /2 of 3 Done-when boxes unticked/, 'the fired-proof: the counts are in the sentence')
-    assert.match(res.error, /--force/, 'and the escape is stated, not left to be discovered')
-    assert.deepEqual([commented, edited, closed], [[], [], []], 'a refusal writes NOTHING')
+    assert.match(
+      res.error,
+      /2 of 3 Done-when boxes unticked/,
+      'the fired-proof: the counts are in the sentence',
+    )
+    assert.match(
+      res.error,
+      /--force/,
+      'and the escape is stated, not left to be discovered',
+    )
+    assert.deepEqual(
+      [commented, edited, closed],
+      [[], [], []],
+      'a refusal writes NOTHING',
+    )
   })
 
   it('closes when the caller supplies measurements as the message, and marks the line', async () => {
     const { coord, commented, closed } = build(UNATTENDED)
-    const res = await coord.done(50, { text: 'measured at ad03d2c: 487/487/0, all three boxes verified' })
+    const res = await coord.done(50, {
+      text: 'measured at ad03d2c: 487/487/0, all three boxes verified',
+    })
     assert.equal(res.ok, true)
     assert.equal(closed.length, 1)
     assert.match(commented[0].text, /^\*\*DONE\*\*/)
-    assert.match(commented[0].text, /unattested: 2\/3/, 'the close says it landed over unticked boxes')
-    assert.match(commented[0].text, /evidence in message/, 'and says which path was taken')
-    assert.equal(res.unattested, 2, 'the count is in the return value too, not only in prose')
+    assert.match(
+      commented[0].text,
+      /unattested: 2\/3/,
+      'the close says it landed over unticked boxes',
+    )
+    assert.match(
+      commented[0].text,
+      /evidence in message/,
+      'and says which path was taken',
+    )
+    assert.equal(
+      res.unattested,
+      2,
+      'the count is in the return value too, not only in prose',
+    )
   })
 
   it('lets --force through with no message and records the override as the worse variant', async () => {
     const { coord, commented } = build(UNATTENDED)
     const res = await coord.done(50, { force: true })
     assert.equal(res.ok, true)
-    assert.match(commented[0].text, /unattested: 2\/3 \| forced over unticked boxes/)
+    assert.match(
+      commented[0].text,
+      /unattested: 2\/3 \| forced over unticked boxes/,
+    )
   })
 
   // The conditional's other half. Without this arm the marker would be decoration: a note printed on
@@ -85,7 +117,11 @@ describe('done (close requires an attestation, #94)', () => {
   it('does not block a numbered Done-when, which has no tick mechanism to satisfy', async () => {
     const { coord, closed } = build(NUMBERED_ONLY)
     const res = await coord.done(50, {})
-    assert.equal(res.ok, true, 'pitcairn #1203 and pi #87 are written this way and close legitimately')
+    assert.equal(
+      res.ok,
+      true,
+      'pitcairn #1203 and pi #87 are written this way and close legitimately',
+    )
     assert.equal(closed.length, 1)
   })
 
@@ -97,7 +133,9 @@ describe('done (close requires an attestation, #94)', () => {
   })
 
   it('is not fooled by a code-fenced quotation of a box line inside the section', async () => {
-    const { coord, closed } = build('## Done when\n```md\n- [ ] this line is a quoted example\n```\n')
+    const { coord, closed } = build(
+      '## Done when\n```md\n- [ ] this line is a quoted example\n```\n',
+    )
     const res = await coord.done(50, {})
     assert.equal(res.ok, true, 'documentation is not an unmet requirement')
     assert.equal(closed.length, 1)
@@ -116,7 +154,9 @@ describe('done (close requires an attestation, #94)', () => {
           number: 50,
           body: UNATTENDED,
           labels: [],
-          comments: [{ body: '**CLAIM** | agent: agent-delta | at: 1700000000000' }],
+          comments: [
+            { body: '**CLAIM** | agent: agent-delta | at: 1700000000000' },
+          ],
         }),
         listIssues: async () => [],
         commentIssue: async (num, text) => commented.push({ num, text }),
@@ -129,7 +169,11 @@ describe('done (close requires an attestation, #94)', () => {
     })
     const res = await stranger.done(50, {})
     assert.equal(res.ok, false)
-    assert.match(res.error, /held by agent-delta/, 'the refusal is the ownership one, not the tick one')
+    assert.match(
+      res.error,
+      /held by agent-delta/,
+      'the refusal is the ownership one, not the tick one',
+    )
     assert.equal(closed.length, 0)
   })
 })

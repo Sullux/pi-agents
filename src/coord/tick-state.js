@@ -51,7 +51,6 @@ const tickState = (body) => {
 
 // The sentence a refusal carries, and the marker a permitted close records. Kept here so the shape is
 // pinned once: an escape hatch nobody can grep for is an escape hatch agents will not find.
-const unattestedNote = (state) =>
-  `unattested: ${state.unticked}/${state.boxes}`
+const unattestedNote = (state) => `unattested: ${state.unticked}/${state.boxes}`
 
 module.exports = { tickState, doneWhenLines, unattestedNote }
