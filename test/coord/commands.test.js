@@ -1010,14 +1010,22 @@ describe("#28 hasClaimBy shares ownerOf's parser, so the token shape cannot drif
     )
   })
 })
-
 describe('#71: one case rule answers "does this issue carry label X" across src/coord', () => {
   const asObjects = (...names) => names.map((name) => ({ name }))
   const now = Date.parse('2026-11-09T05:00:00Z')
-  const decoy = { number: 4, title: 'Decoy', body: '', labels: asObjects('bug'), comments: [] }
+  const decoy = {
+    number: 4,
+    title: 'Decoy',
+    body: '',
+    labels: asObjects('bug'),
+    comments: [],
+  }
   const tail = (labels) =>
     require('../../src/coord/formatters').formatSync({
-      issues: [decoy, { number: 12, title: 'Hub', body: '', labels, comments: [] }],
+      issues: [
+        decoy,
+        { number: 12, title: 'Hub', body: '', labels, comments: [] },
+      ],
       currentAgent: 'other',
       staleMinutes: 45,
       now,
@@ -1028,7 +1036,10 @@ describe('#71: one case rule answers "does this issue carry label X" across src/
     const coord = require('../../src/coord').CoordService({
       github: {
         issueKind: async () => ({ isPullRequest: false }),
-        listIssues: async () => [decoy, { number: 12, title: 'Hub', body: '', labels, comments: [] }],
+        listIssues: async () => [
+          decoy,
+          { number: 12, title: 'Hub', body: '', labels, comments: [] },
+        ],
         commentIssue: async (num, body) => {
           posted.push({ num, body })
         },
@@ -1050,22 +1061,41 @@ describe('#71: one case rule answers "does this issue carry label X" across src/
       /hub #12/,
       'RED pre-#71: hasLabel compared RAW names through labelNames, so the board could not see a row the resolver had just posted to',
     )
-    assert.ok(!out.includes('no hub in'), 'the hub tail is not skipped for a label gh spelled uppercase')
+    assert.ok(
+      !out.includes('no hub in'),
+      'the hub tail is not skipped for a label gh spelled uppercase',
+    )
   })
 
   it('mixed-case Hub resolves both paths too - one rule, not two casings', async () => {
     const { coord, posted } = serviceTo(asObjects('Hub'))
     await coord.hub('on probe: mixed case')
     assert.equal(posted[0].num, 12, 'the resolver folds mixed case')
-    assert.match(tail(asObjects('Hub')), /hub #12/, 'the formatter folds mixed case')
+    assert.match(
+      tail(asObjects('Hub')),
+      /hub #12/,
+      'the formatter folds mixed case',
+    )
   })
 
   it('statusOf folds, so STATUS:Claimed reads as claimed rather than unclaimed', () => {
     const { statusOf } = require('../../src/coord/scope')
     assert.equal(statusOf({ labels: asObjects('STATUS:Claimed') }), 'claimed')
-    assert.equal(statusOf({ labels: asObjects('status:claimed') }), 'claimed', 'the common case is unchanged')
+    assert.equal(
+      statusOf({ labels: asObjects('status:claimed') }),
+      'claimed',
+      'the common case is unchanged',
+    )
     const row = require('../../src/coord/formatters').formatBoard(
-      [{ number: 42, title: 'T', body: '## Files\nsrc/x.js', labels: asObjects('STATUS:CLAIMED'), comments: [] }],
+      [
+        {
+          number: 42,
+          title: 'T',
+          body: '## Files\nsrc/x.js',
+          labels: asObjects('STATUS:CLAIMED'),
+          comments: [],
+        },
+      ],
       'other',
     )
     assert.match(row, /claimed/, 'the board cell agrees with the gate')
@@ -1074,32 +1104,65 @@ describe('#71: one case rule answers "does this issue carry label X" across src/
   it('priorityLabel folds, so P2 is the P cell, and a near-miss label stays a near-miss', () => {
     const { formatBoard } = require('../../src/coord/formatters')
     const row = formatBoard(
-      [{ number: 42, title: 'T', body: '## Files\nsrc/x.js', labels: asObjects('P2'), comments: [] }],
+      [
+        {
+          number: 42,
+          title: 'T',
+          body: '## Files\nsrc/x.js',
+          labels: asObjects('P2'),
+          comments: [],
+        },
+      ],
       'other',
     )
     assert.match(row, /p2/, 'the uppercase priority is readable on the board')
     const lower = formatBoard(
-      [{ number: 42, title: 'T', body: '## Files\nsrc/x.js', labels: asObjects('p2'), comments: [] }],
+      [
+        {
+          number: 42,
+          title: 'T',
+          body: '## Files\nsrc/x.js',
+          labels: asObjects('p2'),
+          comments: [],
+        },
+      ],
       'other',
     )
-    assert.equal(row, lower, 'P2 and p2 render the identical row - one rule, byte-for-byte')
+    assert.equal(
+      row,
+      lower,
+      'P2 and p2 render the identical row - one rule, byte-for-byte',
+    )
   })
 
   it('the fold matches WHOLE labels only: HUBLINE is not hub', () => {
     const { hasLabelName } = require('../../src/coord/scope')
     const issue = { labels: asObjects('HUBLINE', 'hubb', 'status-hub') }
-    assert.equal(hasLabelName(issue, 'hub'), false, 'folding must not turn the match into a substring test')
-    assert.equal(hasLabelName({ labels: asObjects('Hub') }, 'HUB'), true, 'the question is case-insensitive in both arguments')
+    assert.equal(
+      hasLabelName(issue, 'hub'),
+      false,
+      'folding must not turn the match into a substring test',
+    )
+    assert.equal(
+      hasLabelName({ labels: asObjects('Hub') }, 'HUB'),
+      true,
+      'the question is case-insensitive in both arguments',
+    )
   })
 
   it('src/coord/index.js carries no case rule of its own (#71 drift guard)', () => {
-    const read = (m) => require('node:fs').readFileSync(require.resolve(m), 'utf8')
+    const read = (m) =>
+      require('node:fs').readFileSync(require.resolve(m), 'utf8')
     assert.ok(
       !read('../../src/coord/index.js').includes('toLowerCase'),
       'the resolver must read the fold through scope.js - a second private fold here is the exact divergence #71 files, and the comment above labelsOf deliberately does not quote the old expression',
     )
     const scope = read('../../src/coord/scope.js')
     assert.match(scope, /const labelKey = /, 'the rule lives in scope.js')
-    assert.match(scope, /const labelNames = /, 'the RAW accessor stays for the write-back sites')
+    assert.match(
+      scope,
+      /const labelNames = /,
+      'the RAW accessor stays for the write-back sites',
+    )
   })
 })
