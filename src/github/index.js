@@ -27,7 +27,10 @@ const resolveRepoFromRemote = (remoteUrl = '') => {
 const REPO_PROBE = ['remote', 'get-url', 'origin']
 const PAYLOAD_FLAGS = ['--body', '--title']
 
-const firstLine = (value) => String(value ?? '').split('\n', 1)[0].trim()
+const firstLine = (value) =>
+  String(value ?? '')
+    .split('\n', 1)[0]
+    .trim()
 
 const errorCause = (err) => firstLine(err?.stderr ?? err?.message ?? err)
 
@@ -51,7 +54,8 @@ const GitHubClient = ({
     if (repo) return { value: repo, why: 'the repo option' }
     if (process.env.COORD_REPO)
       return { value: process.env.COORD_REPO, why: 'COORD_REPO' }
-    if (process.env.GH_REPO) return { value: process.env.GH_REPO, why: 'GH_REPO' }
+    if (process.env.GH_REPO)
+      return { value: process.env.GH_REPO, why: 'GH_REPO' }
     try {
       const remote = execFile('git', REPO_PROBE, {
         cwd,
