@@ -6,6 +6,7 @@ describe('Coordination Protocol: Service Methods', () => {
   it('hub command strips leading subverbs and formats SYNC comment', async () => {
     let posted = []
     const mockGithub = {
+      issueKind: async () => ({ isPullRequest: false }),
       commentIssue: async (num, body) => {
         posted.push({ num, body })
       },
@@ -34,6 +35,7 @@ describe('Coordination Protocol: Service Methods', () => {
     const posted = []
     const coord = CoordService({
       github: {
+        issueKind: async () => ({ isPullRequest: false }),
         commentIssue: async (num, body) => {
           posted.push({ num, body })
         },
@@ -106,6 +108,7 @@ describe('Coordination Protocol: Service Methods', () => {
     const posted = []
     const coord = CoordService({
       github: {
+        issueKind: async () => ({ isPullRequest: false }),
         commentIssue: async (num, body) => {
           posted.push({ num, body })
         },
@@ -174,6 +177,7 @@ describe('Coordination Protocol: Service Methods', () => {
     let commented = []
 
     const mockGithub = {
+      issueKind: async () => ({ isPullRequest: false }),
       viewIssue: async (num) => ({
         number: num,
         labels: [{ name: 'status:claimed' }, { name: 'p1' }],
@@ -207,6 +211,7 @@ describe('Coordination Protocol: Service Methods', () => {
     let commented = []
 
     const mockGithub = {
+      issueKind: async () => ({ isPullRequest: false }),
       viewIssue: async (num) => ({
         number: num,
         labels: [{ name: 'status:in-review' }, { name: 'p1' }],
@@ -403,6 +408,7 @@ describe('coord hub stamps its own line (#29 guard 2)', () => {
     const posted = []
     const coord = CoordService({
       github: {
+        issueKind: async () => ({ isPullRequest: false }),
         commentIssue: async (num, body) => posted.push({ num, body }),
       },
       agent: 'delta',
@@ -498,6 +504,7 @@ describe('coord label mutation is best-effort (#34)', () => {
     }
     const coord = CoordService({
       github: {
+        issueKind: async () => ({ isPullRequest: false }),
         viewIssue: async () => issue,
         listIssues: async () => [issue],
         commentIssue: async (num, body) => {
@@ -654,6 +661,7 @@ describe('#28 done refuses to close an issue the caller does not hold', () => {
   }) => {
     const writes = []
     const github = {
+      issueKind: async () => ({ isPullRequest: false }),
       viewIssue: async () => ({
         number: 700,
         title: '#28 fixture',

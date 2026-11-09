@@ -1,5 +1,5 @@
 const { cleanAgent, ownerOf, isMine, hasClaimBy } = require('./owner')
-const { isIssueNumber } = require('./issueNumber')
+const { isIssueNumber, pullRequestRefusal } = require('./issueNumber')
 const {
   parseScope,
   checkScopeCollision,
@@ -69,6 +69,21 @@ const CoordService = ({
       'issue, given as a positive integer',
   })
 
+  // #30: one kind check for every mutating verb, run BEFORE the first write, so a mistyped number
+  // cannot half-apply the way the measured incident did: `page coord review 1138 --pr 1138` (an
+  // intended `review 1136 --pr 1138`) posted a **REVIEW** comment and stamped `status:in-review` on
+  // PR #1138, exited 0, and left the issue the board reads holding nothing. GitHub numbers issues and
+  // PRs in one sequence and resolves either, so `isIssueNumber` above is a NUMBER check, not a KIND
+  // check - this is the kind half. Only the POSITIONAL is tested: `--pr <n>` legitimately addresses a
+  // pull request, and refusing it would make the tool reject its own correct usage. The board read
+  // paths (board / sync) deliberately do not pay the extra spawn.
+  const refuseIfPullRequest = async (sub, number) => {
+    const kind = await github.issueKind(number)
+    return kind?.isPullRequest
+      ? { ok: false, error: pullRequestRefusal(sub, number, kind) }
+      : null
+  }
+
   // #34: the protocol comment IS the record; labels are decoration, and a repo can simply
   // not have the taxonomy - pi-agents carries zero status:* labels, measured. Two gh refusals
   // used to arrive as one throw AFTER the comment was written: gh will not REMOVE a label the
@@ -108,6 +123,8 @@ const CoordService = ({
 
   const claim = async (number, { plan = '', eta = '' } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
+    const notAnIssue = await refuseIfPullRequest('claim', number)
+    if (notAnIssue) return notAnIssue
     const issue = await github.viewIssue(number)
     if (!issue) return { ok: false, error: `Issue #${number} not found` }
 
@@ -187,6 +204,8 @@ const CoordService = ({
 
   const release = async (number, { reason = '' } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
+    const notAnIssue = await refuseIfPullRequest('release', number)
+    if (notAnIssue) return notAnIssue
     const commentBody = `**RELEASE** | agent: agent-${cleanCurrent} | reason: ${reason || 'unspecified'}`
     await github.commentIssue(number, commentBody)
     // the view is only for the removal filter below - release used to hand gh a fixed list,
@@ -203,6 +222,8 @@ const CoordService = ({
 
   const status = async (number, message = '') => {
     if (!isIssueNumber(number)) return invalidNumber(number)
+    const notAnIssue = await refuseIfPullRequest('status', number)
+    if (notAnIssue) return notAnIssue
     const commentBody = `**STATUS** | agent: agent-${cleanCurrent} | at: ${now()}\n\n${message}`
     await github.commentIssue(number, commentBody)
     return { ok: true, number }
@@ -216,6 +237,8 @@ const CoordService = ({
   // refuses by default. Anyone tempted to "fix" the asymmetry should read that sentence first.
   const review = async (number, { pr = '', text = '' } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
+    const notAnIssue = await refuseIfPullRequest('review', number)
+    if (notAnIssue) return notAnIssue
     const commentBody =
       `**REVIEW** | agent: agent-${cleanCurrent} | at: ${now()}` +
       (pr ? ` | pr: #${pr}` : '') +
@@ -234,6 +257,8 @@ const CoordService = ({
 
   const done = async (number, { pr = '', text = '', force = false } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
+    const notAnIssue = await refuseIfPullRequest('done', number)
+    if (notAnIssue) return notAnIssue
     // #28: the read moved ABOVE the write. `done` used to post its **DONE** comment, strip
     // `status:*`, and close without asking who held the issue - measured on pitcairn #1104, where
     // a bystander closed a peer's 11-minute-old live claim and the tool reported success the whole

@@ -62,4 +62,43 @@ const requireMessage = (sub, text) =>
         ),
       }
 
-module.exports = { USAGE, isIssueNumber, requireIssueNumber, requireMessage }
+// #30: a PR body that closes work usually says so, and the number is cheap to read out. Deliberately
+// a CANDIDATE list printed for a human to re-run with - the guard never mutates the issue it found
+// here, because guessing which issue a PR closes and writing to it is the silent reinterpretation this
+// family keeps rejecting (#30's own Notes). Covers the keywords GitHub parses, and the fleet's
+// `Refs #N` form too.
+const CLOSING_KEYWORD_RE =
+  /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|refs?)\s*:?\s*#(\d+)/gi
+
+const linkedIssues = (body = '') => {
+  const seen = []
+  for (const match of `${body}`.matchAll(CLOSING_KEYWORD_RE)) {
+    if (!seen.includes(match[1])) seen.push(match[1])
+  }
+  return seen
+}
+
+// Names the offending number, says what it is, and prints the candidate - which is exactly what the
+// measured incident needed: `page coord review 1138 --pr 1138` printed `Moved #1138 to in-review`.
+const pullRequestRefusal = (sub, number, kind = {}) => {
+  const linked = linkedIssues(kind.body)
+  const title = `${kind.title || ''}`.trim()
+  return (
+    `Error: coord ${sub}: #${number} is a PULL REQUEST${title ? ` ("${title}")` : ''}, not an issue - ` +
+    'coord verbs address the board, and GitHub resolves either number from the same sequence, so this ' +
+    'write would post a protocol line onto a tree. Nothing was written. ' +
+    (linked.length
+      ? `It looks like you meant issue ${linked.map((n) => `#${n}`).join(', ')} (read from the PR's own closing line). `
+      : 'No linked issue is resolvable from the PR body. ') +
+    `Usage: page coord ${USAGE[sub] || sub}.`
+  )
+}
+
+module.exports = {
+  USAGE,
+  isIssueNumber,
+  requireIssueNumber,
+  requireMessage,
+  linkedIssues,
+  pullRequestRefusal,
+}
