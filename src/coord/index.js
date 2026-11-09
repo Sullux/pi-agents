@@ -16,6 +16,7 @@ const {
 } = require('./scope')
 const { CoordTaxonomy, LABELLESS_NOTICE } = require('./taxonomy')
 const { evaluateClaimRace, liveClaims } = require('./race')
+const { tickState, unattestedNote } = require('./tick-state')
 const { formatBoard, formatSync } = require('./formatters')
 // #29 guard 2 lives with guard 1 in src/cli/hubText.js, which is where hub-text rules
 // are composed, and that module requires nothing - so this edge cannot form a cycle.
@@ -444,8 +445,28 @@ const CoordService = ({
       }
     }
 
+    // #94: a close IS an attestation, and until this line nothing in the tool read a checkbox - the
+    // fleet's memory cites the Done-when box as "the only gate `coord done` has", and six issues
+    // tonight proved the gate was decoration. The check sits AFTER #28's ownership check and BEFORE
+    // the first write for the reason that comment already states: a refusal that has commented is not
+    // a refusal, so the arms below assert zero side effects rather than only a returned error.
+    const ticks = tickState(issue.body)
+    const closingUnattested = ticks.attestable && ticks.unticked > 0
+    if (closingUnattested && !String(text ?? '').trim() && !force) {
+      return {
+        ok: false,
+        error: `#${number} still has ${ticks.unticked} of ${ticks.boxes} Done-when boxes unticked, and this verb's **DONE** line is what the board trusts as evidence. Measure them at the shipped tip and put the numbers in the message; if a box is unsatisfiable as written, pass --force and say WHICH box and why in the message - do not tick it to get past this guard.`,
+      }
+    }
+
+    // which path was taken stays visible in the record: a close over unticked boxes is the event an
+    // auditor looks for afterwards, and a forced one is the worse variant of it.
+    const tickNote = closingUnattested
+      ? ` | ${unattestedNote(ticks)} | ${force ? 'forced over unticked boxes' : 'evidence in message'}`
+      : ''
     const commentBody =
       `**DONE** | agent: agent-${cleanCurrent} | at: ${now()}` +
+      tickNote +
       (pr ? ` | pr: #${pr}` : '') +
       (text ? `\n\n${text}` : '')
     await github.commentIssue(number, commentBody)
@@ -469,6 +490,8 @@ const CoordService = ({
       // which path was taken is part of the record, not a private boolean: a forced close on a
       // peer's issue is the event an auditor looks for afterwards
       forced: force && !allowed,
+      // #94: same reasoning one field over - the count is what a later reader greps for
+      unattested: closingUnattested ? ticks.unticked : 0,
     }
   }
 
