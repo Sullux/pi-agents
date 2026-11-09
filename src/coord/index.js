@@ -10,6 +10,8 @@ const {
   parseScope,
   checkScopeCollision,
   labelNames,
+  labelKey,
+  labelKeys,
   filesSectionDiagnosis,
 } = require('./scope')
 const { evaluateClaimRace, liveClaims } = require('./race')
@@ -416,7 +418,7 @@ const CoordService = ({
       const why = `${err?.message || err}`.split('\n')[0]
       return `set COORD_HUB=<open issue> (the label taxonomy could not be read: ${why} - so this message cannot claim '${HUB_LABEL}' is absent)`
     }
-    if ((names || []).some((n) => `${n}`.toLowerCase() === HUB_LABEL))
+    if ((names || []).some((n) => labelKey(n) === HUB_LABEL))
       return `label one issue '${HUB_LABEL}' or set COORD_HUB`
     return `set COORD_HUB=<open issue> - this repo's taxonomy has no '${HUB_LABEL}' label to apply, and minting one is a fleet decision: gh label create ${HUB_LABEL}`
   }
@@ -424,8 +426,14 @@ const CoordService = ({
   const hubRefusal = (reason) =>
     `hub: ${reason} in ${github.repo || '(no repo resolved)'} - nothing was posted`
 
-  const labelsOf = (issue) =>
-    (issue.labels || []).map((l) => `${l.name || l}`.toLowerCase())
+  // #71: this used to be a second, private case-fold of the same rule, applied to `issue.labels`
+  // directly - which is how the write path and the formatter could answer "is this the hub?"
+  // differently for one `HUB` label. The fold lives in `scope.js` now (`labelKey` / `labelKeys` /
+  // `hasLabelName`); `labelNames` stays the RAW accessor for the write-back sites
+  // (applyLabels' `removeLabels`), where a folded name would be a spelling this repo never minted.
+  // Deliberately no verbatim copy of the old expression here: a pin asserts this file contains no
+  // case-fold of its own, and a comment that quotes one would make that pin unsatisfiable.
+  const labelsOf = (issue) => labelKeys(issue)
 
   // #53: the target used to be `Number(process.env.COORD_HUB || 4)` - a literal issue
   // number resolved with no label lookup and no existence, kind, or state check, so in a

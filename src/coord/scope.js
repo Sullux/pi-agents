@@ -153,12 +153,24 @@ const filesSectionDiagnosis = (body = '') => {
   return 'no Files heading in either form (## Files, or Files followed by ----)'
 }
 
+// The RAW name gh handed us. Anything that writes a label back (add/remove) must use this,
+// because a fold would send GitHub a spelling this repo never minted.
 const labelNames = (issue) =>
   (issue?.labels || []).map((l) => (typeof l === 'string' ? l : l.name))
 
+// #71: ONE case rule for "does this issue carry label X". GitHub label names are
+// case-insensitively unique, so `HUB` and `hub` are the same label, and the API can hand back
+// whichever casing a human typed. Before this, `src/coord/index.js` folded in its own `labelsOf`
+// while `formatters.hasLabel` compared RAW names through `labelNames` - so an issue labelled
+// `HUB` resolved for the write path and was invisible to the formatter's hub fallback, which is
+// the divergence #71 files. Predicates go through `labelKeys`; write-backs stay on `labelNames`.
+const labelKey = (name) => `${name ?? ''}`.toLowerCase()
+const labelKeys = (issue) => labelNames(issue).map(labelKey)
+const hasLabelName = (issue, name) => labelKeys(issue).includes(labelKey(name))
+
 const statusOf = (issue) =>
-  labelNames(issue)
-    .find((name) => name?.startsWith('status:'))
+  labelKeys(issue)
+    .find((name) => name.startsWith('status:'))
     ?.replace('status:', '') || 'unclaimed'
 
 // #863: `in-review` means the work is FINISHED and awaiting a human or a teammate, so fencing
@@ -226,6 +238,9 @@ module.exports = {
   parseSplits,
   filesSectionDiagnosis,
   labelNames,
+  labelKey,
+  labelKeys,
+  hasLabelName,
   statusOf,
   checkScopeCollision,
 }

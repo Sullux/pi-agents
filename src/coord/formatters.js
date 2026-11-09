@@ -1,5 +1,5 @@
 const { ownerOf, cleanAgent, protocolStatus } = require('./owner')
-const { parseScope, labelNames, statusOf } = require('./scope')
+const { parseScope, labelKeys, hasLabelName, statusOf } = require('./scope')
 const { isIssueNumber } = require('./issueNumber')
 
 // #15: `labelNames` (scope.js) tolerates BOTH shapes a caller can hand us - gh's object labels
@@ -9,15 +9,18 @@ const { isIssueNumber } = require('./issueNumber')
 // 'startsWith')` at the status site. The worse half is silent: the `hub` filter compares
 // `l.name === 'hub'`, which cannot throw and therefore keeps the hub issue, rendering it as a board
 // row - visible only once the crash is fixed. One accessor for both modules, all six sites.
-const hasLabel = (issue, name) => labelNames(issue).includes(name)
+// #71: all three read the folded keys, so `HUB`, `Hub` and `hub` answer the same question here as
+// they do in the resolver. `labelNames` (raw) stays the accessor for anything that writes a label
+// back to GitHub - see scope.js.
+const hasLabel = (issue, name) => hasLabelName(issue, name)
 
 const labelValue = (issue, prefix, fallback = '-') =>
-  labelNames(issue)
-    .find((name) => name?.startsWith(prefix))
+  labelKeys(issue)
+    .find((name) => name.startsWith(prefix))
     ?.slice(prefix.length) || fallback
 
 const priorityLabel = (issue) =>
-  labelNames(issue).find((name) => /^p\d$/.test(name || '')) || '-'
+  labelKeys(issue).find((name) => /^p\d$/.test(name)) || '-'
 
 const pad = (str = '', len = 0) =>
   str.length >= len ? str : str + ' '.repeat(len - str.length)
@@ -34,7 +37,7 @@ const scopeCell = (body) => parseScope(body).join(' ') || '!!NO-SCOPE'
 // byte. If it does not, `statusOf`'s `|| 'unclaimed'` fallback is not a measurement - it is the
 // absence of one - and the CLAIM timeline is the only evidence left.
 const hasStatusLabel = (issue) =>
-  labelNames(issue).some((name) => name?.startsWith('status:'))
+  labelKeys(issue).some((name) => name.startsWith('status:'))
 
 // #66: the timeline can only ever say held / free / review, while labels carry finer states
 // (`in-progress`, `blocked`) that all mean held. Comparing the raw strings would call an
