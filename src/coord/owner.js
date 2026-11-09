@@ -123,6 +123,27 @@ const unresolvedProtocolLines = (comments = []) =>
       return false
     })
 
+// #66: the board needs a STATE, and in a repo that carries no `status:*` labels the only evidence
+// of state is the protocol timeline. Derived from the SAME fold `ownerOf` runs, deliberately: a
+// "last marker wins" reading would print `unclaimed` beside a holder that `applyMarker` keeps in
+// place - a bystander's `DONE` on a claimed issue - which is a fresh instance of the exact
+// contradiction this closes. Returns '' when the issue has no protocol line at all, so a caller can
+// tell "no evidence" apart from "evidence of free".
+const protocolStatus = (issue) => {
+  const comments = issue?.comments || []
+  const markers = comments
+    .map((c) => c.body?.trim() || '')
+    .filter((body) => markerOf(body) !== '')
+  if (!markers.length) return ''
+  // `review` posts **REVIEW** and, in a repo with labels, sets `status:in-review`; the marker is
+  // the same claim in the other taxonomy, so it maps to the same cell.
+  if (markerOf(markers[markers.length - 1]) === 'REVIEW') return 'in-review'
+  // An unresolved CLAIM (#49) is "someone claimed this and we cannot read who", never "nobody did".
+  if (ownerOf(issue) || unresolvedProtocolLines(comments).length)
+    return 'claimed'
+  return 'unclaimed'
+}
+
 module.exports = {
   cleanAgent,
   markerOf,
@@ -131,4 +152,5 @@ module.exports = {
   isMine,
   hasClaimBy,
   unresolvedProtocolLines,
+  protocolStatus,
 }
