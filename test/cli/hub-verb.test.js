@@ -55,6 +55,36 @@ describe('page coord hub (#3)', () => {
     }
   })
 
+  // #27: the reported command, end to end. `hub 4 --body-file f` used to post the file PLUS a
+  // trailing `4`, print `Posted to hub #4` and exit 0 - the number in that line is the hub
+  // lookup, not a statement about the payload, so nothing in the output could reveal the artifact.
+  it('refuses a numeric positional alongside --body-file - exit 1, nothing posted', async () => {
+    const path = join(tmpdir(), `hub-27-${Date.now()}.md`)
+    writeFileSync(path, 'the long markdown body\n')
+    try {
+      const { cli, posted, out, err } = harness()
+      const code = await cli.run(['coord', 'hub', '4', '--body-file', path])
+      assert.equal(code, 1)
+      assert.equal(posted.length, 0, 'the guard ran BEFORE the hub write')
+      assert.equal(out.join(''), '', 'no success line on a refusal')
+      assert.match(err.join('\n'), /hub takes no issue-number positional/)
+      assert.match(
+        err.join('\n'),
+        /`4`/,
+        'the refusal names the token it refused',
+      )
+    } finally {
+      rmSync(path, { force: true })
+    }
+  })
+
+  it('still posts a numeric positional that is the whole message - the fence holds at the verb', async () => {
+    const { cli, posted, out } = harness()
+    const code = await cli.run(['coord', 'hub', '4'])
+    assert.equal(code, 0)
+    assert.equal(posted.length, 1)
+    assert.match(out.join('\n'), /Posted to hub #\d+/)
+  })
   // The exact reported failure: no argument at all.
   it('refuses a bare verb - exit 1, no success line, NOTHING posted', async () => {
     const { cli, posted, out, err } = harness()
