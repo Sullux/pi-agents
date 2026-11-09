@@ -166,3 +166,152 @@ describe('scope gate #76: an unclaimed open issue with a shared concrete path wa
     )
   })
 })
+
+// The reviewer's gap, and it was a real one: making an overlap visible also made the advice text
+// false, because BOTH renderers hardcoded "rebase owed after it merges" - true for an in-review
+// neighbour whose merge is pending, untrue for an unclaimed one that may never merge. So these
+// arms pin the rendered strings, not just the payload: an advice that travels on the warning but
+// is never printed is the same bug in a different hat.
+
+const SHARED_PATH = 'test/style-debt.mjs'
+
+const claimHarness = ({ rivalLabels = [], rivalComments = [] }) => {
+  const posted = []
+  const out = []
+  const targetIssue = {
+    number: 1171,
+    body: `## Files\n${SHARED_PATH}\nsrc/x.js`,
+    labels: [{ name: 'status:unclaimed' }],
+    comments: [],
+  }
+  const rival = {
+    number: 1179,
+    body: `## Files\n${SHARED_PATH}\npublic/y.css`,
+    labels: rivalLabels,
+    comments: rivalComments,
+  }
+  const github = () => ({
+    issueKind: async () => ({ isPullRequest: false }),
+    viewIssue: async (num) => (num === 1171 ? targetIssue : rival),
+    listIssues: async () => [targetIssue, rival],
+    commentIssue: async (num, body) => {
+      posted.push(body)
+      targetIssue.comments.push({ body })
+    },
+    editIssue: async () => {},
+    closeIssue: async () => {},
+  })
+  return { posted, out, github }
+}
+
+const OLD_FALSE_CLAIM =
+  'scope: overlaps in-review work, rebase owed after it merges'
+
+describe('scope gate #77: the advice an overlap carries is the advice an agent reads', () => {
+  it('an unheld overlap is rendered as a warning about unclaimed work, not a rebase owed', async () => {
+    const { CoordService } = require('../../src/coord')
+    const h = claimHarness({})
+    const coord = CoordService({
+      github: h.github(),
+      agent: 'bravo',
+      human: 'Sullux',
+      now: () => 1700000000000,
+    })
+
+    const res = await coord.claim(1171, { plan: 'p', eta: '10m' })
+    assert.equal(res.ok, true, 'an unheld overlap must not fence the claim')
+
+    const note = h.posted[0]
+    assert.ok(
+      note.includes('scope: overlapping open work'),
+      'the header names the class, not one status',
+    )
+    assert.ok(
+      !note.includes(OLD_FALSE_CLAIM),
+      'the sentence that was untrue for this case is gone',
+    )
+    const bullet = note.split('\n').find((l) => l.startsWith('- #1179'))
+    assert.ok(bullet, 'the rival is named in its own bullet')
+    assert.ok(
+      bullet.includes('no claim yet'),
+      'and the advice matches the actual state',
+    )
+    assert.ok(
+      !bullet.includes('rebase owed'),
+      'no merge is promised that may never happen',
+    )
+    assert.ok(
+      bullet.includes('(nobody)'),
+      'the holder cell says nobody rather than reading as a holder',
+    )
+  })
+
+  it('the SAME renderer still says "rebase owed" for an in-review neighbour - the arm that keeps the fix honest', async () => {
+    const { CoordService } = require('../../src/coord')
+    const h = claimHarness({
+      rivalLabels: [{ name: 'status:in-review' }],
+      rivalComments: [{ body: '**CLAIM** | agent: agent-delta | at: 1' }],
+    })
+    const coord = CoordService({
+      github: h.github(),
+      agent: 'bravo',
+      human: 'Sullux',
+      now: () => 1700000000000,
+    })
+
+    await coord.claim(1171, { plan: 'p', eta: '10m' })
+    const bullet = h.posted[0].split('\n').find((l) => l.startsWith('- #1179'))
+    assert.ok(
+      bullet.includes('rebase owed after it merges (status:in-review)'),
+      `the true case must survive: ${bullet}`,
+    )
+    assert.ok(
+      !bullet.includes('no claim yet'),
+      'and delta is not described as absent',
+    )
+    assert.ok(bullet.includes('(delta)'), 'the holder names itself')
+  })
+
+  it('the CLI line an agent actually reads carries the same advice, and drops the false clause', async () => {
+    const { Cli } = require('../../src/cli')
+    const { CoordService } = require('../../src/coord')
+    const h = claimHarness({})
+    const out = []
+    const cli = Cli({
+      github: { repo: 'Sullux/pi-agents' },
+      coordFactory: ({ agent }) =>
+        CoordService({
+          github: {
+            ...h.github(),
+            viewIssue: async (num) =>
+              num === 1171
+                ? { ...(await h.github().viewIssue(1171)) }
+                : h.github().viewIssue(1179),
+          },
+          agent,
+          human: 'Sullux',
+          now: () => 1700000000000,
+        }),
+      provenance: { describe: () => '', note: () => '' },
+      stdout: (line) => out.push(line),
+      stderr: () => {},
+    })
+
+    const code = await cli.run(['coord', 'claim', '1171'])
+    assert.equal(code, 0, 'the claim succeeds')
+    const line = out.find((l) => l.startsWith('  ! overlaps'))
+    assert.ok(line, `the warning reaches stdout: ${JSON.stringify(out)}`)
+    assert.ok(
+      line.includes('(unclaimed, nobody)'),
+      'status and holder are both stated',
+    )
+    assert.ok(
+      line.includes('no claim yet'),
+      'and the advice is the truthful one',
+    )
+    assert.ok(
+      !line.includes('rebase after it merges'),
+      'the old hardcoded clause is gone from the CLI too',
+    )
+  })
+})

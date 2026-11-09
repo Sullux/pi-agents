@@ -166,21 +166,27 @@ const statusOf = (issue) =>
 // this way on 2026-10-26, and #820 still frozen on 2026-10-27. The remedy for a second author is
 // a rebase after the merge, so it warns. `claimed`, `in-progress` and `blocked` are live edits
 // and still refuse.
-// #863: `in-review` means the work is FINISHED and awaiting a human or a teammate, so fencing
-// files against it blocks new work with completed work - measured 4 of 5 unclaimed issues frozen
-// this way on 2026-10-26, and #820 still frozen on 2026-10-27. The remedy for a second author is
-// a rebase after the merge, so it warns. `claimed`, `in-progress` and `blocked` are live edits
-// and still refuse.
 const SOFT_STATUSES = ['in-review']
 
 // #76: the `!owner` half of the old skip made an UNCLAIMED issue invisible to the gate, so two
 // agents could claim the same concrete path in the same minute and neither was warned - the
 // pitcairn pair #1171 / #1179 (both open, both declaring test/style-debt.mjs, both unclaimed) is
 // the live witness. An unclaimed overlap is a warning and never a refusal: nobody has committed
-// to it yet, and fencing on a declaration would freeze the very work the board calls free. The
-// phrasing the renderers use is tracked separately, because `src/coord/index.js` is held by PR
-// #72 - this file only has to make the overlap RETURN.
+// to it yet, and fencing on a declaration would freeze the very work the board calls free.
+//
+// #77 review: making an unheld overlap VISIBLE also made the advice text wrong, because
+// both renderers hardcoded "rebase owed after it merges" - true for an `in-review` overlap whose
+// merge is already pending, false for an unclaimed one that may never merge. The gate went from
+// saying nothing to saying something untrue, which is the worse of the two. So the advice travels
+// ON the warning, computed once where the collision is classified, and each renderer keeps only
+// its own presentation (the CLAIM comment uses a `- ` bullet, the CLI an indented `!` line). An
+// exported builder would still have left the two call sites free to disagree.
 const UNHELD_AGENT = 'nobody'
+
+const warningAdvice = (warning) =>
+  warning.unheld
+    ? 'no claim yet: coordinate before both edit, or claim it first if you mean to own it'
+    : `rebase owed after it merges (status:${warning.status})`
 
 const checkScopeCollision = (
   targetFiles = [],
@@ -217,6 +223,7 @@ const checkScopeCollision = (
       status: statusOf(issue),
       files: collidingFiles,
       unheld,
+      advice: warningAdvice({ unheld, status: statusOf(issue) }),
       soft: unheld || SOFT_STATUSES.includes(statusOf(issue)),
     })
   }
