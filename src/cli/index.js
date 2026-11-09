@@ -527,10 +527,23 @@ const Cli = ({
           stdout(
             `  ! the issue comment is recorded but the PR thread was not: ${res.prCommentWarning}`,
           )
+          if (res.prHeadWarning)
+            stdout(
+              `  ! the PR head ref did not resolve either, so a retry will need both: ${res.prHeadWarning}`,
+            )
           return
         }
         if (!res.prCommented) return
         stdout(`  · verdict also signed on PR #${res.prCommented} (#87)`)
+        // #89: the head token is the thing preflight matches, so a verdict posted without one
+        // has to say so out loud. Silence here is #87's failure mode again by a different name:
+        // the review exists, the runner keeps re-asking for it, and nothing on screen tells the
+        // operator the two disagree. Both fields are printed rather than returned-only, so no
+        // warning can be swallowed into a property no assertion reads.
+        if (res.prHeadWarning)
+          stdout(
+            `  ! it carries no head token, so preflight still counts this PR as unreviewed: ${res.prHeadWarning}`,
+          )
       }
 
       const reviewLine = (number, target, res) => {

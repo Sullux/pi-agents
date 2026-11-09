@@ -348,12 +348,40 @@ const CoordService = ({
       throw new TypeError(
         'coord review --pr needs github.commentPr on the injected client (#87)',
       )
+    // #89: the same polarity for the new read seam. A client without `viewPr` is #87's bug
+    // wearing a different name - swallowed, it posts the verdict WITHOUT the head token, and
+    // preflight keeps counting an already-reviewed PR as unreviewed forever. Thrown, it is a
+    // loud programming error. A FAILED read is the opposite kind of fact and stays caught: an
+    // unverifiable head must not cost the fleet the verdict itself.
+    if (typeof github.viewPr !== 'function')
+      throw new TypeError(
+        'coord review --pr needs github.viewPr on the injected client (#89)',
+      )
+    let headShort = ''
+    let headWarning = ''
     try {
-      await github.commentPr(pr, body)
-      return { prCommented: pr }
+      const oid = String((await github.viewPr(pr)) || '')
+      headShort = oid.slice(0, 7)
+      if (!headShort) headWarning = `gh pr view #${pr} returned no headRefOid`
+    } catch (error) {
+      headWarning = String(error?.stderr || error?.message || error)
+    }
+    // A trailing line, never an edit to the header: #88 byte-pins the first line on both
+    // surfaces, and the matcher only needs the short SHA somewhere in the body.
+    const prBody = headShort ? `${body}\n\nhead: \`${headShort}\`` : body
+    try {
+      await github.commentPr(pr, prBody)
+      return {
+        prCommented: pr,
+        ...(headShort ? { prHead: headShort } : {}),
+        ...(headWarning ? { prHeadWarning: headWarning } : {}),
+      }
     } catch (error) {
       const detail = String(error?.stderr || error?.message || error)
-      return { prCommentWarning: detail }
+      return {
+        prCommentWarning: detail,
+        ...(headWarning ? { prHeadWarning: headWarning } : {}),
+      }
     }
   }
 

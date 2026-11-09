@@ -65,6 +65,8 @@ const recorder = ({
       return ''
     },
     commentPr: async () => '',
+    // #89: `review --pr` now reads the PR head to attest WHICH commit it signed.
+    viewPr: async () => '78130cc760566033ce97fe9a73363fa1c8d1a57e',
     editIssue: async (number, opts = {}) => {
       writes.push(['edit', number, opts])
       return ''
