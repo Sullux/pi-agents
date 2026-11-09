@@ -398,8 +398,99 @@ const CoordService = ({
     }
   }
 
+  const HUB_LABEL = 'hub'
+
+  // #53 review ask (agent-Alpha, merge held by agent-delta): the old sentence always offered
+  // `label one issue 'hub'`, which is a command GitHub refuses in pi-agents - that repo's taxonomy
+  // has nine stock labels and no `hub`, so `--add-label hub` dies with `could not add label` and
+  // creates no artifact. The refusal now reads the taxonomy and points at the exit that works,
+  // and it says so when it could not read it: "absent" and "unknown" are different facts, and the
+  // second must never be reported as the first.
+  const hubLabelAdvice = async () => {
+    if (!github.listLabels)
+      return `label one issue '${HUB_LABEL}' if that label exists here, or set COORD_HUB`
+    let names
+    try {
+      names = await github.listLabels()
+    } catch (err) {
+      const why = `${err?.message || err}`.split('\n')[0]
+      return `set COORD_HUB=<open issue> (the label taxonomy could not be read: ${why} - so this message cannot claim '${HUB_LABEL}' is absent)`
+    }
+    if ((names || []).some((n) => `${n}`.toLowerCase() === HUB_LABEL))
+      return `label one issue '${HUB_LABEL}' or set COORD_HUB`
+    return `set COORD_HUB=<open issue> - this repo's taxonomy has no '${HUB_LABEL}' label to apply, and minting one is a fleet decision: gh label create ${HUB_LABEL}`
+  }
+
+  const hubRefusal = (reason) =>
+    `hub: ${reason} in ${github.repo || '(no repo resolved)'} - nothing was posted`
+
+  const labelsOf = (issue) =>
+    (issue.labels || []).map((l) => `${l.name || l}`.toLowerCase())
+
+  // #53: the target used to be `Number(process.env.COORD_HUB || 4)` - a literal issue
+  // number resolved with no label lookup and no existence, kind, or state check, so in a
+  // repo that has no hub issue the verb appended fleet reports to whatever object happened
+  // to carry that number (in pi-agents: the closed #4 ENOBUFS bug report) and printed
+  // success naming a DIFFERENT repo. Resolution is now explicit COORD_HUB, else the single
+  // open issue carrying the `hub` label, else a refusal that says which.
+  const readHubTarget = async () => {
+    const declared = `${process.env.COORD_HUB ?? ''}`.trim()
+    // A client that cannot list cannot be verified as having a hub, so the optional call
+    // lands on the `no open issue carries the 'hub' label` refusal below rather than a
+    // TypeError out of the verb - the safe outcome is still a refusal, never an assumption.
+    const open = (await github.listIssues?.({ state: 'open' })) || []
+    if (declared) {
+      const number = Number(declared)
+      if (!isIssueNumber(number)) {
+        return {
+          error: hubRefusal(
+            `COORD_HUB=${JSON.stringify(declared)} is not a positive integer issue number`,
+          ),
+        }
+      }
+      const listed = open.find((i) => Number(i.number) === number)
+      if (!listed) {
+        const kind = await github.issueKind(number)
+        const why = kind?.isPullRequest
+          ? `#${number} is a pull request, not an issue`
+          : `#${number} is not an open issue here (closed, or outside the ${open.length} row(s) read)`
+        return {
+          error: hubRefusal(
+            `COORD_HUB=${number} cannot receive a hub line: ${why}`,
+          ),
+        }
+      }
+      return { number, via: `COORD_HUB=${number}` }
+    }
+    const labelled = open.filter((i) => labelsOf(i).includes(HUB_LABEL))
+    if (labelled.length === 0) {
+      return {
+        error: hubRefusal(
+          `no open issue carries the '${HUB_LABEL}' label and COORD_HUB is unset - ${(await hubLabelAdvice()).trim()}`,
+        ),
+      }
+    }
+    // SKILL.md's Canonical hub invariant: `COORD_HUB` when set, else the LOWEST-numbered
+    // open issue labelled `hub`. Ambiguity is not a refusal - a deterministic choice is
+    // what makes two agents' runs agree, and the docs' own guidance ("exactly one issue
+    // should retain that label") is a cleanup note, not a condition to fail on. The `via`
+    // string carries the count so a reader of the record can see the crowding.
+    const usable = labelled
+      .map((i) => Number(i.number))
+      .filter((n) => isIssueNumber(n))
+      .sort((a, b) => a - b)
+    if (!usable.length) {
+      return {
+        error: hubRefusal(
+          `${labelled.length} issue(s) carry the '${HUB_LABEL}' label but none has a usable issue number`,
+        ),
+      }
+    }
+    const via = `the '${HUB_LABEL}' label (lowest of ${usable.length})`
+    return { number: usable[0], via }
+  }
+
   const hub = async (text = '') => {
-    const hubNumber = Number(process.env.COORD_HUB || 4)
     // #3: the strip also has to match a BARE subverb. `/\s+/` only fires when text
     // follows, so `page coord hub on` used to post the literal word `on` to the fleet
     // hub - a contentless coordination signal from a verb that reports success.
@@ -425,8 +516,19 @@ const CoordService = ({
     // time (or a bogus one the author typed) is the defect #29 was filed for.
     const stamped = ensureStamp(commentBody, now)
     if (stamped.error) return { ok: false, error: stamped.error }
-    await github.commentIssue(hubNumber, stamped.text)
-    return { ok: true, hubNumber }
+    // The target is the LAST guard before the write, so a bad message or a bad stamp
+    // never costs a repo read, and a repo with no hub never reaches commentIssue at all.
+    const target = await readHubTarget()
+    if (target.error) return { ok: false, error: target.error }
+    await github.commentIssue(target.number, stamped.text)
+    // #53: the success value carries the repo the write actually went through, so the
+    // CLI line cannot name a client that was never used (the old `@${target}` did).
+    return {
+      ok: true,
+      hubNumber: target.number,
+      repo: github.repo,
+      via: target.via,
+    }
   }
 
   const board = async () => {
