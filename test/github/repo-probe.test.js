@@ -1,6 +1,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { GitHubClient } = require('../../src/github')
+const { CoordService } = require('../../src/coord')
 
 // #41: from a directory with no .git, `page coord hub "..."` exited 1 having posted nothing, and
 // its last line was `Error: Command failed: gh issue comment 4 --body <the entire message>`. The
@@ -245,5 +246,85 @@ describe('repo resolution and error attribution (#41)', () => {
         'short bodies must redact too',
       )
       assert.match(message, /--body <4 chars redacted>/)
+    }))
+
+  // #57: every arm above calls `runGh` directly, which is why a second path to `gh` - `ghApi`, added by #48 and
+  // deliberately bypassing `runGh` because `gh api` rejects `--repo` - could spawn `gh api repos//issues/N` with
+  // no repo resolved while the refusal below it promised that nothing had been sent. These two arms go through
+  // the paths instead of through one function, so the promise is judged at the level a user sees it.
+  it('ghApi refuses before spawning too - the second gh path is covered (#57)', async () => {
+    await withCleanRepoEnv(async () => {
+      const calls = []
+      const client = GitHubClient({
+        execFile: probeThrows(calls),
+        cwd: '/nope',
+      })
+      const kind = await client.issueKind(27)
+      assert.equal(
+        kind,
+        undefined,
+        'the probe stays honest about not knowing instead of throwing up through the guard',
+      )
+      assert.deepEqual(
+        calls,
+        [['git', 'remote get-url origin']],
+        'no `gh api repos//issues/27` - "nothing was sent" has to hold about reads as well as writes',
+      )
+    })
+  })
+
+  it('a verb through CoordService reaches neither gh path - the guard is not runGh-only (#57)', async () => {
+    await withCleanRepoEnv(async () => {
+      const calls = []
+      const coord = CoordService({
+        github: GitHubClient({ execFile: probeThrows(calls), cwd: '/nope' }),
+        agent: 'alpha',
+        human: 'Sullux',
+        now: () => 1,
+      })
+      const err = await assert.rejects(
+        () => coord.claim(27, { plan: SECRET_BODY, eta: '5m' }),
+        /no target repo, so nothing was sent to GitHub/,
+        'the verb must fail with the probe named as the cause',
+      )
+      assert.ok(
+        !String(err?.message).includes(SECRET_BODY),
+        'and the plan text must not ride along in the error',
+      )
+      assert.deepEqual(
+        calls,
+        [['git', 'remote get-url origin']],
+        'neither `gh api` (the kind probe) nor `gh issue` (the write) was reached',
+      )
+    })
+  })
+
+  // `withCleanRepoEnv` is synchronous by design, so an async body continues after the env is restored; that is
+  // safe here and only here because `resolveRepo` runs at construction, which is the first synchronous statement
+  // of the body. An arm that read the env after an await would be judging the operator's shell.
+  it('the equals form of a payload flag is redacted as well (#57)', () =>
+    withCleanRepoEnv(() => {
+      const client = GitHubClient({
+        execFile: (cmd) => {
+          if (cmd === 'git') return 'git@github.com:Sullux/pi-agents.git'
+          const err = new Error('Command failed: gh issue edit')
+          err.stderr = 'gh: Not Found (HTTP 404)'
+          throw err
+        },
+        cwd: '/x',
+      })
+      const message = captureThrow(() =>
+        client.runGh(['issue', 'edit', '4', `--body=${SECRET_BODY}`]),
+      )
+      assert.ok(message !== null, 'expected a throw, got none')
+      assert.ok(
+        !message.includes(SECRET_BODY),
+        'the --body=X form leaked the payload through the argv echo',
+      )
+      assert.match(
+        message,
+        new RegExp(`--body=<${SECRET_BODY.length} chars redacted>`),
+        'countable but not readable, in either spelling',
+      )
     }))
 })
