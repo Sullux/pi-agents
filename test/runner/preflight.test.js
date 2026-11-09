@@ -4,6 +4,8 @@ const {
   checkBacklogAvailability,
   isPrAuthoredByAgent,
   isPrReviewedByAgent,
+  prReviewGap,
+  VERDICT_MARKERS,
 } = require('../../src/runner/preflight')
 
 describe('Runner: Backlog Preflight', () => {
@@ -266,5 +268,167 @@ describe('Runner: PR Authorship and Review Helpers', () => {
     }
     assert.equal(isPrReviewedByAgent(pr, 'delta'), true)
     assert.equal(isPrReviewedByAgent(pr, 'echo'), false)
+  })
+})
+
+// #90: the matcher answers a yes/no question, and `checkBacklogAvailability` read every `false` as "go
+// review this" - including the falses caused by an unsigned verdict or a moved head. The allowlist stays
+// closed (a head-cited witness is not a verdict; that follows from the caller's `reviewablePrs` filter,
+// which asks "is a verdict owed?", not "has anyone attested?"), so the cause is named instead. Both live
+// bodies below are byte-copied from real threads, because #89's gap stayed invisible while every fixture
+// described a shape the tool never emits.
+describe('Runner: #90 review-gap causes, named instead of widened', () => {
+  // Live bytes: PR #84's thread, agent-charlie's attestation of one acceptance box.
+  const CHARLIE_WITNESS =
+    '**NON-SELF WITNESS for box 5** | agent: agent-charlie | measured at `a029d24810314ee042b0235f2ab0c495bfd27d3f`'
+  // Live bytes: the retraction shape the arm above already carries - note `head` with NO colon, which is
+  // why HEAD_CITED_RE cannot require one.
+  const DELTA_RETRACTION =
+    '**RETRACTION of my two APPROVEs** | agent: agent-delta | head `dcc9637` | at: 2026-10-28T16:30:15Z'
+  // The shape #88 wrote before #89: signed header, no head token anywhere in the body.
+  const UNSIGNED_VERDICT =
+    '**REVIEW** | agent: agent-alpha | verdict: APPROVE | at: 1794264219372'
+
+  const prAt = (sha, bodies) => ({
+    number: 84,
+    headRefOid: sha,
+    comments: bodies.map((body) => ({ body })),
+  })
+
+  it('a head-cited attestation with a non-protocol marker is an attestation, not a verdict', () => {
+    const pr = prAt('a029d24810314ee042b0235f2ab0c495bfd27d3f', [
+      CHARLIE_WITNESS,
+    ])
+    assert.equal(isPrReviewedByAgent(pr, 'echo'), false)
+    const gap = prReviewGap(pr, 'echo')
+    assert.equal(gap.gap, 'non-verdict-attestation')
+    assert.match(gap.hint, /NON-SELF WITNESS for box 5/)
+    assert.match(gap.hint, /charlie/)
+    assert.match(gap.hint, /verdict is still owed/)
+  })
+
+  it('the attester themself is told a verdict is owed, not that they already reviewed it', () => {
+    const pr = prAt('a029d24810314ee042b0235f2ab0c495bfd27d3f', [
+      CHARLIE_WITNESS,
+    ])
+    assert.equal(prReviewGap(pr, 'charlie').gap, 'non-verdict-attestation')
+  })
+
+  it('a verdict citing a head that moved reads STALE, and the hint carries both SHAs', () => {
+    const pr = prAt('9f3c1d2aaaa5b1c2d3e4f50617283940aabbccdd', [
+      DELTA_RETRACTION,
+    ])
+    assert.equal(isPrReviewedByAgent(pr, 'delta'), false)
+    const gap = prReviewGap(pr, 'delta')
+    assert.equal(gap.gap, 'stale-head-verdict')
+    assert.match(gap.hint, /`dcc9637`/)
+    assert.match(gap.hint, /`9f3c1d2`/)
+  })
+
+  it('the same live retraction at its own current head reads reviewed, not stale', () => {
+    const pr = prAt('dcc9637e5ebc2d284750c2b384de993cd9e057a5', [
+      DELTA_RETRACTION,
+    ])
+    assert.equal(isPrReviewedByAgent(pr, 'delta'), true)
+    assert.equal(prReviewGap(pr, 'delta').gap, 'reviewed')
+  })
+
+  it('a verdict signed with no head token reads unsigned, and names the verb that fixes it', () => {
+    const pr = prAt('13b0ee90e7fbd0e867303ea4fb84a41f446568d8', [
+      UNSIGNED_VERDICT,
+    ])
+    assert.equal(isPrReviewedByAgent(pr, 'alpha'), false)
+    const gap = prReviewGap(pr, 'alpha')
+    assert.equal(gap.gap, 'unsigned-verdict')
+    assert.match(gap.hint, /no head token/)
+    assert.match(gap.hint, /page coord review <issue> --pr 84/)
+  })
+
+  it('an empty thread reads unreviewed - the one case where the old advice was right', () => {
+    const pr = prAt('13b0ee90e7fbd0e867303ea4fb84a41f446568d8', [])
+    assert.equal(prReviewGap(pr, 'echo').gap, 'unreviewed')
+  })
+
+  it('no identity is UNMEASURED, never a silent "nobody reviewed this"', () => {
+    const pr = prAt('13b0ee90e7fbd0e867303ea4fb84a41f446568d8', [
+      CHARLIE_WITNESS,
+    ])
+    assert.equal(prReviewGap(pr, '').gap, 'unmeasured')
+  })
+
+  it('the verb list is ONE list: every marker matches, and WITNESS is not among them', () => {
+    const sha = 'abcdef0123456789abcdef0123456789abcdef01'
+    VERDICT_MARKERS.forEach((marker) => {
+      const pr = prAt(sha, [
+        `**${marker} of the earlier pass** | agent: agent-echo | head \`${sha.slice(0, 7)}\``,
+      ])
+      assert.equal(
+        isPrReviewedByAgent(pr, 'echo'),
+        true,
+        `${marker} must match`,
+      )
+      assert.equal(prReviewGap(pr, 'echo').gap, 'reviewed', `${marker} gap`)
+    })
+    const witness = prAt(sha, [
+      `**WITNESS for box 2** | agent: agent-echo | head \`${sha.slice(0, 7)}\``,
+    ])
+    assert.equal(isPrReviewedByAgent(witness, 'echo'), false)
+    assert.equal(prReviewGap(witness, 'echo').gap, 'non-verdict-attestation')
+  })
+
+  it('the join, per fixture: the gap says "reviewed" on exactly the threads the matcher accepts', () => {
+    const cases = [
+      ['a029d24810314ee042b0235f2ab0c495bfd27d3f', CHARLIE_WITNESS, 'echo'],
+      ['9f3c1d2aaaa5b1c2d3e4f50617283940aabbccdd', DELTA_RETRACTION, 'delta'],
+      ['13b0ee90e7fbd0e867303ea4fb84a41f446568d8', UNSIGNED_VERDICT, 'alpha'],
+      ['dcc9637e5ebc2d284750c2b384de993cd9e057a5', DELTA_RETRACTION, 'delta'],
+      ['dcc9637e5ebc2d284750c2b384de993cd9e057a5', CHARLIE_WITNESS, 'echo'],
+    ]
+    cases.forEach(([sha, body, agent]) => {
+      const pr = prAt(sha, [body])
+      assert.equal(
+        prReviewGap(pr, agent).gap === 'reviewed',
+        isPrReviewedByAgent(pr, agent),
+        `classifier and matcher disagreed at ${sha.slice(0, 7)} for ${agent}`,
+      )
+    })
+  })
+
+  it('checkBacklogAvailability carries the cause per PR, one entry per counted PR', async () => {
+    const issues = [
+      {
+        number: 20,
+        labels: [{ name: 'status:claimed' }],
+        comments: [{ body: '**CLAIM** | agent: bravo' }],
+      },
+    ]
+    const github = {
+      listIssues: async () => issues,
+      listPrs: async () => [
+        prAt('a029d24810314ee042b0235f2ab0c495bfd27d3f', [CHARLIE_WITNESS]),
+        {
+          number: 91,
+          headRefOid: '13b0ee90e7fbd0e867303ea4fb84a41f446568d8',
+          comments: [{ body: UNSIGNED_VERDICT }],
+        },
+        {
+          number: 7,
+          headRefOid: 'eeeeeee5ebc2d284750c2b384de993cd9e057a5',
+          comments: [],
+        },
+      ],
+    }
+
+    const res = await checkBacklogAvailability({ github, agent: 'alpha' })
+    assert.equal(res.reason, 'open_prs')
+    assert.equal(res.reviewGaps.length, res.count)
+    assert.deepEqual(
+      res.reviewGaps.map((g) => [g.number, g.gap]),
+      [
+        [84, 'non-verdict-attestation'],
+        [91, 'unsigned-verdict'],
+        [7, 'unreviewed'],
+      ],
+    )
   })
 })
