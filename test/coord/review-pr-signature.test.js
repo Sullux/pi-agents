@@ -2,6 +2,10 @@ const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { CoordService } = require('../../src/coord')
 const { Cli } = require('../../src/cli')
+// #89: the join is the point of this file's second half. The matcher lives in the runner, and
+// before this change nothing in the repo compared it to what `review` actually wrote - #88's 7
+// arms all stayed green while the consumer kept answering "unreviewed".
+const { isPrReviewedByAgent } = require('../../src/runner/preflight')
 
 // #87: `review` signed the ISSUE comment and left the PR thread to a hand-run
 // `gh pr comment`, which carries no author signal - every agent on this box pushes as
@@ -20,9 +24,21 @@ const NOW = 1700000000000
 const LABELLED = ['bug', 'status:claimed', 'status:in-review']
 const asObjects = (names) => names.map((name) => ({ name }))
 
-const world = ({ prFail = false, seam = true, agent = 'agent-bravo' } = {}) => {
+// A real short head SHA from this repo's history, so the token's 7-char slice is exercised with
+// a value that could not collide with a fixture's own digits.
+const HEAD_OID = '78130cc760566033ce97fe9a73363fa1c8d1a57e'
+
+const world = ({
+  prFail = false,
+  seam = true,
+  headSeam = true,
+  headFail = false,
+  headOid = HEAD_OID,
+  agent = 'agent-bravo',
+} = {}) => {
   const issueWrites = []
   const prWrites = []
+  const prReads = []
   const github = {
     repo: 'Sullux/pi-agents',
     issueKind: async () => ({ isPullRequest: false }),
@@ -47,9 +63,20 @@ const world = ({ prFail = false, seam = true, agent = 'agent-bravo' } = {}) => {
       prWrites.push({ number, body })
     }
   }
+  // The read seam is separately removable from the write seam on purpose: an arm that strips
+  // one must redden a different set of assertions than an arm that strips the other, or the
+  // selectivity claims in this file are decoration.
+  if (headSeam) {
+    github.viewPr = async (number) => {
+      prReads.push(number)
+      if (headFail) throw new Error('gh: could not find pull request #33')
+      return headOid
+    }
+  }
   return {
     issueWrites,
     prWrites,
+    prReads,
     coord: CoordService({ github, agent, human: 'Sullux', now: () => NOW }),
   }
 }
@@ -113,6 +140,11 @@ describe('#87: a review verdict is signed where it is read, not only on the issu
     assert.equal(res.ok, true, JSON.stringify(res))
     assert.equal(w.issueWrites.length, 1)
     assert.equal(w.prWrites.length, 0, 'no PR number, no PR write')
+    assert.equal(
+      w.prReads.length,
+      0,
+      'and no PR READ either - the head fetch must live inside the `if (pr)` path, or every issue-only verdict pays a round trip (#89)',
+    )
     assert.equal(res.prCommented, undefined)
     assert.equal(res.prCommentWarning, undefined)
     assert.equal(
@@ -154,7 +186,7 @@ describe('#87: a review verdict is signed where it is read, not only on the issu
 })
 
 describe('#87 CLI half: the operator hears which half landed', () => {
-  const cliHarness = ({ prFail = false }) => {
+  const cliHarness = ({ prFail = false, headFail = false }) => {
     const out = []
     const err = []
     const cli = Cli({
@@ -178,6 +210,11 @@ describe('#87 CLI half: the operator hears which half landed', () => {
             commentPr: async () => {
               if (prFail) throw new Error('could not find issue #33')
               return ''
+            },
+            viewPr: async () => {
+              if (headFail)
+                throw new Error('gh: could not find pull request #33')
+              return HEAD_OID
             },
           },
           agent,
@@ -233,5 +270,143 @@ describe('#87 CLI half: the operator hears which half landed', () => {
       false,
       'the success dot-line must not print when nothing was signed',
     )
+  })
+
+  it('a verdict that lands WITHOUT the head token says the runner will still ask for one', async () => {
+    // #89's reporting half: the write succeeded, so #88's attestation still prints, and the
+    // caveat is a SECOND line rather than a replacement. Collapsing the two would hide which
+    // of the two facts - signed, or signed-and-verifiable - the operator actually has.
+    const h = cliHarness({ headFail: true })
+    assert.equal(await h.run(), 0, `${h.err} | ${h.out}`)
+    const unsigned = h.out.filter((l) =>
+      l.startsWith('  ! it carries no head token'),
+    )
+    assert.equal(
+      unsigned.length,
+      1,
+      `the warning must PRINT, not merely be returned: ${h.out.join(' | ')}`,
+    )
+    assert.match(
+      unsigned[0],
+      /could not find pull request/,
+      'and it names the reason, per #87\'s "told WHY, not merely that"',
+    )
+    assert.equal(
+      h.out.filter((l) => l.startsWith('  · verdict also signed')).length,
+      1,
+      "the thread really was signed, so #88's dot-line stays",
+    )
+    assert.deepEqual(
+      h.err,
+      [],
+      'a missing token is a caveat, not a failed verb',
+    )
+  })
+})
+
+// #89: #88 made a verdict attributable to a HUMAN; this makes it attributable to the
+// automation that already reads the same thread. preflight's isPrReviewedByAgent requires a
+// signed header AND `body.includes(pr.headRefOid.slice(0, 7))`, and the writer only ever
+// emitted the header - measured before this change by running the shipped pair against the
+// shipped string: header true, short-sha false, so the runner kept answering "unreviewed".
+// The arms below run the two shipped halves against each other, which is the thing #88 could
+// not see: all 7 of its arms stayed green across the entire gap.
+describe('#89: the PR copy carries the head token the runner matches', () => {
+  it('the body the tool writes satisfies the shipped matcher', async () => {
+    const w = world()
+    const res = await w.coord.review(34, {
+      pr: 33,
+      text: 'APPROVE - probe table attached',
+    })
+    assert.equal(
+      res.prHead,
+      HEAD_OID.slice(0, 7),
+      `the token is reported back to the caller: ${JSON.stringify(res)}`,
+    )
+    const body = w.prWrites[0].body
+    assert.equal(
+      isPrReviewedByAgent(
+        { headRefOid: HEAD_OID, comments: [{ body }] },
+        'agent-bravo',
+      ),
+      true,
+      `writer and matcher disagree:\n${body}`,
+    )
+  })
+
+  it('non-vacuity: the issue copy - identical but for the token - still reads unreviewed', async () => {
+    // Without this the join could pass because the matcher accepts anything. Measured before
+    // the fix: false. It also pins #89's other contract - the protocol record does NOT gain
+    // the token, because ownerOf and the board read that surface.
+    const w = world()
+    await w.coord.review(34, { pr: 33, text: 'APPROVE' })
+    const issueBody = w.issueWrites[0].body
+    assert.equal(
+      isPrReviewedByAgent(
+        { headRefOid: HEAD_OID, comments: [{ body: issueBody }] },
+        'agent-bravo',
+      ),
+      false,
+      'the header alone must not satisfy the matcher, or this arm proves nothing',
+    )
+    assert.equal(
+      issueBody.includes(HEAD_OID.slice(0, 7)),
+      false,
+      `the token never reaches the issue surface: ${issueBody}`,
+    )
+    assert.equal(
+      w.prWrites[0].body.split('\n')[0],
+      issueBody.split('\n')[0],
+      'both surfaces keep the same signed header - the token is appended, not substituted',
+    )
+  })
+
+  it('a head that moved past the token is not a review of the new head', async () => {
+    // This is what makes it a wire test instead of a second copy of the same assumption: a
+    // stale attestation goes red rather than silently re-covering the branch.
+    const w = world()
+    await w.coord.review(34, { pr: 33, text: 'APPROVE' })
+    assert.equal(
+      isPrReviewedByAgent(
+        {
+          headRefOid: 'ffffffffffffffffffffffffffffffffffffffff',
+          comments: [{ body: w.prWrites[0].body }],
+        },
+        'agent-bravo',
+      ),
+      false,
+      'reviewing one commit must not attest the next one',
+    )
+  })
+
+  it('a failed head read still posts the verdict, minus the token', async () => {
+    const w = world({ headFail: true })
+    const res = await w.coord.review(34, { pr: 33, text: 'APPROVE' })
+    assert.equal(w.prWrites.length, 1, 'the thread still gets the verdict')
+    assert.equal(res.prCommented, 33)
+    assert.equal(res.prHead, undefined)
+    assert.match(
+      String(res.prHeadWarning),
+      /could not find pull request/,
+      `and the reason survives: ${JSON.stringify(res)}`,
+    )
+    assert.equal(
+      w.prWrites[0].body.includes('head: `'),
+      false,
+      'no token, so no trailing line - the body is exactly what #88 wrote',
+    )
+  })
+
+  it('a client with no viewPr seam FAILS LOUDLY, not silently unsigned', async () => {
+    // The same polarity #87 had to learn: caught, a missing seam becomes a warning no existing
+    // assertion reads, and the suite goes green while the defect ships. Thrown, it is a
+    // programming error the next agent sees immediately.
+    const w = world({ headSeam: false })
+    await assert.rejects(
+      () => w.coord.review(34, { pr: 33, text: 'verdict' }),
+      /needs github\.viewPr on the injected client \(#89\)/,
+      'a programming error must not be reported as a runtime outcome',
+    )
+    assert.equal(w.prWrites.length, 0, 'it throws before staging any PR write')
   })
 })

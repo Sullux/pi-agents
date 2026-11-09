@@ -268,6 +268,25 @@ const GitHubClient = ({
   const commentPr = async (number, body) =>
     runGh(['pr', 'comment', String(number), '--body', body])
 
+  // #89: `review --pr` has to attest WHICH commit it reviewed, because the consumer this repo
+  // already has - src/runner/preflight.js's isPrReviewedByAgent - matches a PR comment only
+  // when the short head SHA appears in its body. It reads ONE pull request instead of reusing
+  // listPrs below on purpose: preflight legitimately needs the whole list, a verdict needs one
+  // number, and listPrs carries every PR's comments with it. A null field yields '', which the
+  // caller turns into a reported warning rather than a silently unsigned verdict.
+  const viewPr = async (number) => {
+    const raw = runGh(['pr', 'view', String(number), '--json', 'headRefOid'])
+    try {
+      return JSON.parse(raw).headRefOid || ''
+    } catch (error) {
+      throw new Error(
+        `coord: gh pr view #${number} returned unparsable JSON (${String(
+          error?.message || error,
+        )})`,
+      )
+    }
+  }
+
   const editIssue = async (
     number,
     { addLabels = [], removeLabels = [] } = {},
@@ -312,6 +331,7 @@ const GitHubClient = ({
     viewIssue,
     commentIssue,
     commentPr,
+    viewPr,
     editIssue,
     closeIssue,
     createIssue,
