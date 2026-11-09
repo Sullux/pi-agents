@@ -18,35 +18,98 @@ const resolveRepoFromRemote = (remoteUrl = '') => {
   return httpsMatch ? httpsMatch[1] : ''
 }
 
+// #41: a repo-less call produced two error lines and everybody read the wrong one. The probe used
+// to swallow its own failure and return '', the gh call then went out WITHOUT `--repo`, and Node's
+// execFileSync message prints the full argv - so `not a git repository` arrived looking like a
+// GitHub or shell-quoting fault, with the entire hub body filling the screen as proof. Measured
+// from a directory with no .git: rc=1, nothing posted, and two wrong hypotheses built from that
+// text. Both halves are fixed here: the failing probe is named, and a payload never echoes.
+const REPO_PROBE = ['remote', 'get-url', 'origin']
+const PAYLOAD_FLAGS = ['--body', '--title']
+
+const firstLine = (value) =>
+  String(value ?? '')
+    .split('\n', 1)[0]
+    .trim()
+
+const errorCause = (err) => firstLine(err?.stderr ?? err?.message ?? err)
+
+// Error text only - the spawn always receives the real array.
+const safeArgv = (args = []) =>
+  args.map((arg, i) =>
+    PAYLOAD_FLAGS.includes(args[i - 1])
+      ? `<${String(arg).length} chars redacted>`
+      : arg,
+  )
+
 const GitHubClient = ({
   execFile = execFileSync,
   repo = '',
   cwd = process.cwd(),
 } = {}) => {
-  const getRepo = () => {
-    if (repo) return repo
-    if (process.env.COORD_REPO) return process.env.COORD_REPO
+  // Every source that can name the repo, in precedence order, and the reason each one was or was
+  // not usable. GH_REPO counts because `gh` itself reads it: refusing there would break a call the
+  // old code completed. The probe result is kept, not discarded, so its failure text is available.
+  const resolveRepo = () => {
+    if (repo) return { value: repo, why: 'the repo option' }
+    if (process.env.COORD_REPO)
+      return { value: process.env.COORD_REPO, why: 'COORD_REPO' }
+    if (process.env.GH_REPO)
+      return { value: process.env.GH_REPO, why: 'GH_REPO' }
     try {
-      const remote = execFile('git', ['remote', 'get-url', 'origin'], {
+      const remote = execFile('git', REPO_PROBE, {
         cwd,
         encoding: 'utf8',
         maxBuffer: GH_MAX_BUFFER,
       })
-      return resolveRepoFromRemote(remote)
-    } catch {
-      return ''
+      const value = resolveRepoFromRemote(remote)
+      if (value) return { value, why: `git ${REPO_PROBE.join(' ')}` }
+      return {
+        value: '',
+        why:
+          `git ${REPO_PROBE.join(' ')} answered \`${firstLine(remote) || '(empty)'}\`, ` +
+          'which is not a GitHub origin',
+      }
+    } catch (err) {
+      return {
+        value: '',
+        why: `git ${REPO_PROBE.join(' ')} failed: ${errorCause(err) || 'no message'}`,
+      }
     }
   }
 
-  const activeRepo = getRepo()
+  const resolution = resolveRepo()
+  const activeRepo = resolution.value
+
+  // Thrown lazily, never at construction: `client.repo` is a display value two callers read
+  // (src/cli/index.js's `target`, formatBoard), and an unconstructable client would break a read
+  // that may still resolve on its own. By the time this fires nothing has been sent, so the
+  // message can promise that honestly instead of leaving it to be inferred from a gh argv dump.
+  const noRepoError = () =>
+    new Error(
+      `coord: no target repo, so nothing was sent to GitHub - ${resolution.why} (cwd ${cwd}). ` +
+        'Set COORD_REPO or GH_REPO, pass --repo, or run from inside a repo whose origin is a ' +
+        'GitHub remote.',
+    )
 
   const runGh = (args = []) => {
-    const fullArgs = activeRepo ? [...args, '--repo', activeRepo] : args
-    const result = execFile('gh', fullArgs, {
-      cwd,
-      encoding: 'utf8',
-      maxBuffer: GH_MAX_BUFFER,
-    })
+    if (!activeRepo) throw noRepoError()
+    const fullArgs = [...args, '--repo', activeRepo]
+    let result
+    try {
+      result = execFile('gh', fullArgs, {
+        cwd,
+        encoding: 'utf8',
+        maxBuffer: GH_MAX_BUFFER,
+      })
+    } catch (err) {
+      // Node's own text is `Command failed: gh <whole argv>`; that argv is where a 3KB hub line
+      // used to land, and a body on screen reads like the body was the problem.
+      throw new Error(
+        `coord: gh ${args.slice(0, 2).join(' ')} failed against ${activeRepo} - ` +
+          `${errorCause(err) || 'no message'}\n  argv: gh ${safeArgv(fullArgs).join(' ')}`,
+      )
+    }
     return result?.toString()?.trim() || ''
   }
 
