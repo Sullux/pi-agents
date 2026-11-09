@@ -189,6 +189,62 @@ describe('coord hub placeholder refusal (#29 guard 1)', () => {
     }
   })
 
+  // #69: the slot patterns used `[^>]*` after the token, which is a PREFIX match, so every word
+  // that merely started with a slot token read as an un-replaced template. This bit me live: a
+  // hub line quoting an identifier shape refused, and the refusal echoed a substring nobody had
+  // typed as a slot. Prose runs must post.
+  it('posts prose whose word run merely starts with a slot token (#69)', () => {
+    for (const frag of [
+      '<name>',
+      '<node>',
+      '<nil>',
+      '<null>',
+      '<pristine>',
+      '<refactor>',
+      '<oidc>',
+      '<issueCount>',
+      '<filename>',
+      '<directory>',
+    ]) {
+      const text = `the pane reports ${frag} for that row`
+      const res = hubText({}, text)
+      assert.equal(
+        res.error,
+        undefined,
+        `${frag} is prose in angle brackets, not a slot: ${res.error}`,
+      )
+      assert.equal(res.text, text, `${frag} must pass through untouched`)
+    }
+  })
+
+  // The discriminator, tested in BOTH directions on the same token so the arm cannot be
+  // satisfied by narrowing the pattern until nothing refuses: token then `>` is a slot, token
+  // then whitespace then filler is a slot awaiting a value, token then more word characters is
+  // prose. Dropping the optional filler group reddens the refuses-halves; restoring `[^>]*`
+  // reddens the posts-halves.
+  it('the boundary is what separates a slot from prose - both directions, same token (#69)', () => {
+    assert.equal(
+      hubText({}, 'the token <name> is prose').text,
+      'the token <name> is prose',
+    )
+    refuses('the token <n> is a slot', 'a <number> template slot')
+    assert.equal(
+      hubText({}, 'a <issueCount> field').text,
+      'a <issueCount> field',
+    )
+    refuses('closes <issue 5> cleanly', 'a <number> template slot')
+    assert.equal(
+      hubText({}, 'the <committing> flag').text,
+      'the <committing> flag',
+    )
+    refuses('verified at <sha abc123> on main', 'a <sha> template slot')
+    assert.equal(
+      hubText({}, 'a <pathological> case').text,
+      'a <pathological> case',
+    )
+    refuses('writes to <path to file>', 'a <path> template slot')
+  })
+
   // The scope sentence is a coverage claim, so it is asserted here rather than trusted from
   // a comment: an agent whose multi-line body passes must be able to see WHY it passed.
   it('states that only the first line is scanned', () => {

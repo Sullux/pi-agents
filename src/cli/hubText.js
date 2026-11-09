@@ -23,12 +23,20 @@ const HUB_USAGE =
 // parseScope anchors on line-initial `## Files` instead of matching anywhere.
 // Quoting one of these tokens is legitimate, so a backtick code span is exempt.
 const CODE_SPAN_RE = /`[^`\n]*`/g
+// #69: each slot needs a BOUNDARY after the token, optionally followed by filler. The old
+// `[^>]*` let any word that merely STARTED with a slot token read as an un-replaced template,
+// so `<name>` (name ~ n), `<node>`, `<nil>`, `<null>`, `<pristine>`, `<refactor>` and `<oidc>`
+// all refused a hub line that contained no slot at all. Slot-with-filler forms still refuse,
+// because there the boundary is whitespace: `<issue 5>`, `<number of rows>`, `<sha abc123>`.
+// The discriminator is therefore: token then `>` (a slot), or token then space then anything
+// (a slot awaiting a value); token then more WORD CHARACTERS (prose that happens to be in
+// angle brackets). Prose runs are what an agent writes when quoting an identifier shape.
 const PLACEHOLDER_FORMS = [
   ['an unreplaced time token', /\b\d{1,2}:[0-9xX][xX](?::[0-9xX]{2})?Z?\b/],
   ['a bare XX', /\bXX\b/],
-  ['a <sha> template slot', /<(?:sha|commit|ref|oid)[^>]*>/i],
-  ['a <path> template slot', /<(?:path|file|dir)[^>]*>/i],
-  ['a <number> template slot', /<(?:n|num|number|issue|pr)[^>]*>/i],
+  ['a <sha> template slot', /<(?:sha|commit|ref|oid)(?:\s[^>]*)?>/i],
+  ['a <path> template slot', /<(?:path|file|dir)(?:\s[^>]*)?>/i],
+  ['a <number> template slot', /<(?:n|num|number|issue|pr)(?:\s[^>]*)?>/i],
 ]
 // The group CAPTURES: `lead[1]` is what names the token in the refusal. Written as a
 // non-capturing `(?:TODO|FIXME)` it returned undefined and threw TypeError instead of
