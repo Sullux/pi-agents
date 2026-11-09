@@ -76,6 +76,24 @@ const verdictPattern = (norm) =>
 
 const shortHead = (pr) => (pr.headRefOid ? pr.headRefOid.slice(0, 7) : '')
 
+const namedHead = (body) => HEAD_CITED_RE.exec(body)?.[1]?.slice(0, 7) || ''
+
+// #93: currency means the head a verdict NAMES is the head. Three sites used a bare `includes(shortSha)`, and a
+// review body quotes base SHAs, issue refs and prose mentions of the new head freely, so a verdict attesting a
+// DEAD head became "current" the moment anyone wrote the new sha in a sentence - which is what every reviewer on
+// this fleet writes ("main moved to f3e6adf, re-measure before merging"). The prose mention is evidence about the
+// conversation, not about which commit was reviewed.
+//
+// A verdict that names NO head keeps the substring read. That is deliberate, not leftover: pre-#89 hand-shaped
+// attestations carry no token the writer produced, and requiring one would newly report a hundred correctly
+// reviewed threads as unreviewed - the false-negative direction, where work vanishes off the board. Pin: the
+// fallback arm in test/runner/preflight.test.js names this clause.
+const verdictIsCurrent = (body, shortSha) => {
+  if (!shortSha) return true
+  const named = namedHead(body)
+  return named ? named === shortSha : body.includes(shortSha)
+}
+
 const isPrReviewedByAgent = (pr, agent) => {
   const norm = cleanAgent(agent)
   if (!norm || !pr.comments?.length) return false
@@ -86,7 +104,7 @@ const isPrReviewedByAgent = (pr, agent) => {
   return pr.comments.some((c) => {
     const body = c.body || ''
     if (!revPat.test(body)) return false
-    return shortSha ? body.includes(shortSha) : true
+    return verdictIsCurrent(body, shortSha)
   })
 }
 
@@ -110,13 +128,11 @@ const prReviewGap = (pr, agent) => {
   const bodies = (pr.comments || []).map((c) => c.body || '')
   const mine = bodies.filter((b) => verdictPattern(norm).test(b))
 
-  if (mine.some((b) => (shortSha ? b.includes(shortSha) : true))) {
+  if (mine.some((b) => verdictIsCurrent(b, shortSha))) {
     return { number: pr.number, gap: 'reviewed', hint: '' }
   }
 
-  const cited = mine
-    .map((b) => HEAD_CITED_RE.exec(b)?.[1]?.slice(0, 7))
-    .find((h) => h && h !== shortSha)
+  const cited = mine.map((b) => namedHead(b)).find((h) => h && h !== shortSha)
   if (cited) {
     return {
       number: pr.number,
@@ -139,7 +155,7 @@ const prReviewGap = (pr, agent) => {
       ({ b, m }) =>
         m &&
         shortSha &&
-        b.includes(shortSha) &&
+        verdictIsCurrent(b, shortSha) &&
         !VERDICT_MARKERS.some((v) => m[1].toUpperCase().startsWith(v)),
     )
   if (witness) {
