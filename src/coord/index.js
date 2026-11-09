@@ -14,6 +14,7 @@ const {
   labelKeys,
   filesSectionDiagnosis,
 } = require('./scope')
+const { CoordTaxonomy, LABELLESS_NOTICE } = require('./taxonomy')
 const { evaluateClaimRace, liveClaims } = require('./race')
 const { formatBoard, formatSync } = require('./formatters')
 // #29 guard 2 lives with guard 1 in src/cli/hubText.js, which is where hub-text rules
@@ -157,6 +158,10 @@ const CoordService = ({
   // what the issue actually has, so most calls never fire, and a residual failure comes back as a
   // warning instead of throwing. Swallowing it silently would be worse than the throw: an agent
   // that believes labels moved reads a board that never changed, so the CLI has to print this.
+  // #79: one probe per service instance, consulted before the write below. Kept beside
+  // `applyLabels` rather than inside it because the four mutating verbs share this closure.
+  const taxonomy = CoordTaxonomy({ github })
+
   const applyLabels = async (
     number,
     { addLabels = [], removeLabels = [], issue } = {},
@@ -164,6 +169,13 @@ const CoordService = ({
     const present = labelNames(issue)
     const removable = removeLabels.filter((name) => present.includes(name))
     if (!addLabels.length && !removable.length) return {}
+    // #79: in a repo that has never been bootstrapped with the taxonomy, this write cannot
+    // succeed and never will, so saying so is truer than quoting the refusal. #34's loudness
+    // contract is intact: the CLI still prints a line, it just prints the accurate one. A repo
+    // that HAS status: labels falls straight through to the real write below.
+    if (await taxonomy.labelWriteIsMeaningless()) {
+      return { labelNotice: LABELLESS_NOTICE }
+    }
     // only the keys with work behind them: `done` historically sent no addLabels at all, and
     // a pin asserts that shape because an empty `--add-label` is exactly the doomed call this
     // issue is about
