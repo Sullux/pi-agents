@@ -93,8 +93,12 @@ test('a repo with no hub says so, names the repo, and never prints a phantom #4'
   })
   assert.match(
     out,
-    /== no hub in Sullux\/pi-agents - label one open issue `hub` or set COORD_HUB/,
+    /== no hub in Sullux\/pi-agents - the hub tail is skipped ==/,
     tailLine(out),
+  )
+  assert.ok(
+    !/label one open issue/.test(out),
+    'the formatter must not re-advice: the resolver owns that sentence',
   )
   assert.ok(
     !/== hub #4/.test(out),
@@ -132,6 +136,7 @@ const world = ({
   issues = [],
   kind = { isPullRequest: false },
   repo = 'Sullux/test',
+  taxonomy = null,
 } = {}) => {
   const posted = []
   const reads = []
@@ -146,6 +151,9 @@ const world = ({
       posted.push({ num, body })
       return ''
     },
+  }
+  if (taxonomy) {
+    github.listLabels = async () => taxonomy
   }
   return {
     posted,
@@ -253,6 +261,59 @@ test('a repo whose hub is numbered BELOW 4 - the reachable production case - sho
     assert.ok(
       !/== hub #4/.test(out),
       'the literal default must not reappear for a low hub number',
+    )
+  })
+})
+
+test("the no-hub board carries the resolver's taxonomy advice once, not a copy of its own", async () => {
+  const w = world({
+    issues: [row(7)],
+    repo: 'Sullux/pi-agents',
+    taxonomy: ['bug', 'p1', 'ws:infra'],
+  })
+  await withHub(undefined, async () => {
+    const out = await w.coord.sync()
+    assert.match(
+      out,
+      /== no hub in Sullux\/pi-agents - the hub tail is skipped ==/,
+      tailLine(out),
+    )
+    const advice = out
+      .split('\n')
+      .filter((l) => l.includes("no 'hub' label to apply"))
+    assert.equal(
+      advice.length,
+      1,
+      `advice must arrive exactly once:\n${out.slice(-500)}`,
+    )
+    assert.match(
+      advice[0],
+      /minting one is a fleet decision: gh label create hub/,
+      advice[0],
+    )
+    assert.ok(
+      !out.includes('label one open issue'),
+      'the formatter must not print the step the write path refuses to advise',
+    )
+  })
+})
+
+test('a taxonomy that DOES carry the label gets the label advice, still from one place', async () => {
+  const w = world({
+    issues: [row(7)],
+    repo: 'Sullux/pitcairn-portal',
+    taxonomy: ['bug', 'hub'],
+  })
+  await withHub(undefined, async () => {
+    const out = await w.coord.sync()
+    assert.match(
+      out,
+      /label one issue 'hub' or set COORD_HUB/,
+      out.split('\n').slice(-3).join('\n'),
+    )
+    assert.ok(
+      !out.includes('label one open issue'),
+      'no second copy of the instruction',
     )
   })
 })

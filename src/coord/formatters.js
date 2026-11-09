@@ -221,7 +221,11 @@ const formatSync = ({
   const hubComments = (hubIssue?.comments || []).slice(-5)
   const hubLines = !isIssueNumber(located.number)
     ? [
-        `\n== no hub in ${repo || '(no repo resolved)'} - label one open issue \`hub\` or set COORD_HUB; the hub tail is skipped ==`,
+        // #65 + #53 review ask, composed: the ADVICE lives in `hubReason` - the resolver's own
+        // taxonomy-aware sentence - because a second copy here is how two surfaces start disagreeing.
+        // This line told readers to `label one open issue \`hub\`` in a repo where that exact step is
+        // refused, three commits after the write path stopped saying it.
+        `\n== no hub in ${repo || '(no repo resolved)'} - the hub tail is skipped ==`,
         ...(hubReason ? [`  ${hubReason}`] : []),
       ]
     : [
