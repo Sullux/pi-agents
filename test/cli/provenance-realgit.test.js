@@ -1,7 +1,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { spawnSync, execFileSync } = require('node:child_process')
-const { mkdtempSync, rmSync } = require('node:fs')
+const { mkdtempSync, rmSync, mkdirSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
 const { join } = require('node:path')
 
@@ -168,6 +168,101 @@ describe('real git (#21)', () => {
       assert.match(state.note, /^coord note: running from/)
       assert.match(state.note, /detached/)
       assert.doesNotMatch(state.note, /\n/, 'the note grew past one line')
+    } finally {
+      rmSync(seed, { recursive: true, force: true })
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it('ignores node_modules in the repo under test, and the ignore probe is shown biting', () => {
+    // #74: pi-agents had NO .gitignore at all, so `yarn install`'s node_modules/.yarn-integrity made
+    // the shared runtime tree read dirty on every command. This arm can only pass in the real repo,
+    // and the control keeps it from being vacuous: `git check-ignore` exits 0 for an ignored path and
+    // nonzero for a tracked one, so a probe that ignores nothing would fail right here.
+    const ignored = spawnSync('git', ['check-ignore', '-q', 'node_modules'], {
+      cwd: ROOT,
+      ...quiet,
+    })
+    const tracked = spawnSync('git', ['check-ignore', '-q', 'package.json'], {
+      cwd: ROOT,
+      ...quiet,
+    })
+    assert.equal(
+      ignored.status,
+      0,
+      'node_modules is not ignored in this repo - the #74 rule did not land',
+    )
+    assert.notEqual(
+      tracked.status,
+      0,
+      'the ignore probe matched everything, so the first assert proved nothing',
+    )
+    assert.equal(
+      execFileSync('git', ['ls-files', '.gitignore'], {
+        cwd: ROOT,
+        encoding: 'utf8',
+      }).trim(),
+      '.gitignore',
+      "the ignore rule is not tracked, so it cannot protect another agent's checkout",
+    )
+  })
+
+  it('calls an untracked node_modules what it is, and an ignore rule is what clears it', () => {
+    // A trusted tip is the substrate, so the untracked path is the ONLY variable: the clone sits on
+    // its own origin/HEAD and reads clean and trusted; one untracked file flips it to untracked-only
+    // AND untrusted (the gate staying strict is the claim); git's local equivalent of .gitignore -
+    // .git/info/exclude, which never appears in the work tree - puts it back. That file is used
+    // deliberately: writing a .gitignore INTO the fixture would add untracked dirt of its own, which
+    // is the very thing under test.
+    const seed = freshRepo()
+    const base = mkdtempSync(join(tmpdir(), 'delta74-'))
+    const clone = join(base, 'clone')
+    try {
+      execFileSync('git', ['clone', '-q', seed, clone], {
+        ...quiet,
+        cwd: base,
+        encoding: 'utf8',
+      })
+      git(clone, ['checkout', '-q', '--detach'])
+      const before = stateIn(clone)
+      assert.equal(before.trusted, true, 'the substrate is not a trusted tip')
+      assert.equal(before.note, '')
+
+      mkdirSync(join(clone, 'node_modules'))
+      writeFileSync(join(clone, 'node_modules', '.yarn-integrity'), '{}\n')
+      const grown = stateIn(clone)
+      assert.deepEqual(grown.untracked, ['node_modules/'])
+      assert.equal(
+        grown.dirty,
+        false,
+        'an untracked install dir was read as a tracked edit',
+      )
+      assert.equal(
+        grown.trusted,
+        false,
+        'the gate moved: an untracked file is live code to require(), so it must stay untrusted',
+      )
+      assert.match(grown.note, /untracked only \(1 path\(s\): node_modules\/\)/)
+      assert.doesNotMatch(
+        grown.note,
+        /\bdirty\b/,
+        `note called it dirty: ${grown.note}`,
+      )
+
+      writeFileSync(join(clone, '.git', 'info', 'exclude'), 'node_modules\n')
+      const cleared = stateIn(clone)
+      assert.deepEqual(
+        cleared.untracked,
+        [],
+        "the ignore rule did not reach git's status",
+      )
+      assert.equal(cleared.dirty, false)
+      assert.equal(
+        cleared.trusted,
+        true,
+        'an ignored install dir must not nag the fleet forever',
+      )
+      assert.equal(cleared.note, '')
     } finally {
       rmSync(seed, { recursive: true, force: true })
       rmSync(base, { recursive: true, force: true })
