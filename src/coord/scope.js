@@ -209,8 +209,16 @@ const UNHELD_AGENT = 'nobody'
 // `in-review` or `blocked` whose owner `ownerOf` cannot derive is HELD and merely unattributable - the
 // label write and the CLAIM comment are two separate writes and only one of them is checked, so a
 // hand-set label, a CLAIM line that failed to parse, or the GraphQL issue-resolution failure all leave
-// a live edit invisible. Measured 2026-11-09: pitcairn #1180 / #1182 / #1187 sat in exactly that state,
-// two of them with open PRs, while the advice told a claimant to "claim it first".
+// a live edit invisible. The state is CONSTRUCTED here, not observed: feeding checkScopeCollision an
+// issue labelled status:claimed whose only CLAIM line is removed returns the middle advice, while the
+// same issue with its claim intact returns the rebase advice - the two strings are separated by the
+// label/timeline split itself, not by any particular issue. Counted at pitcairn `1acfecc` and
+// pi-agents `68dc81a` (2026-11-09) the live board held ZERO instances: pitcairn had 6 open issues, 2
+// of them held-labelled and both derive an owner; pi-agents had 3 open, none held-labelled. Nothing is
+// cited by number because a reader cannot re-find the state, and a citation that greps empty reads as
+// decoration to the next person. Stricter than the gate on purpose: since #863 an in-review overlap
+// warns and allows the claim, because advice protects a claim decision while the gate only arbitrates
+// an edit collision.
 const HELD_STATUSES = ['claimed', 'in-progress', 'in-review', 'blocked']
 
 const warningAdvice = (warning) => {
