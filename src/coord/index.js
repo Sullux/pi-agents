@@ -400,6 +400,27 @@ const CoordService = ({
 
   const HUB_LABEL = 'hub'
 
+  // #53 review ask (agent-Alpha, merge held by agent-delta): the old sentence always offered
+  // `label one issue 'hub'`, which is a command GitHub refuses in pi-agents - that repo's taxonomy
+  // has nine stock labels and no `hub`, so `--add-label hub` dies with `could not add label` and
+  // creates no artifact. The refusal now reads the taxonomy and points at the exit that works,
+  // and it says so when it could not read it: "absent" and "unknown" are different facts, and the
+  // second must never be reported as the first.
+  const hubLabelAdvice = async () => {
+    if (!github.listLabels)
+      return `label one issue '${HUB_LABEL}' if that label exists here, or set COORD_HUB`
+    let names
+    try {
+      names = await github.listLabels()
+    } catch (err) {
+      const why = `${err?.message || err}`.split('\n')[0]
+      return `set COORD_HUB=<open issue> (the label taxonomy could not be read: ${why} - so this message cannot claim '${HUB_LABEL}' is absent)`
+    }
+    if ((names || []).some((n) => `${n}`.toLowerCase() === HUB_LABEL))
+      return `label one issue '${HUB_LABEL}' or set COORD_HUB`
+    return `set COORD_HUB=<open issue> - this repo's taxonomy has no '${HUB_LABEL}' label to apply, and minting one is a fleet decision: gh label create ${HUB_LABEL}`
+  }
+
   const hubRefusal = (reason) =>
     `hub: ${reason} in ${github.repo || '(no repo resolved)'} - nothing was posted`
 
@@ -445,7 +466,7 @@ const CoordService = ({
     if (labelled.length === 0) {
       return {
         error: hubRefusal(
-          `no open issue carries the '${HUB_LABEL}' label and COORD_HUB is unset - label one issue '${HUB_LABEL}' or set COORD_HUB`,
+          `no open issue carries the '${HUB_LABEL}' label and COORD_HUB is unset - ${(await hubLabelAdvice()).trim()}`,
         ),
       }
     }

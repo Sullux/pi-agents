@@ -14,14 +14,29 @@ const world = ({
   kind = { isPullRequest: false },
   repo = 'Sullux/pi-agents',
   listable = true,
+  taxonomy = ['bug', 'hub'],
+  taxonomyThrows = null,
+  hasLabelsSeam = true,
 } = {}) => {
   const posted = []
   const reads = []
+  const labelReads = []
   const github = {
     repo,
     issueKind: async () => kind,
     commentIssue: async (num, body) => posted.push({ num, body }),
   }
+  // #53 review ask: the refusal has to know the repo's taxonomy to advise an exit that works, so
+  // the fake models all four shapes a real client can present: label present, label absent (pi-agents
+  // today), the read throwing, and an older client with no seam at all.
+  if (hasLabelsSeam) {
+    github.listLabels = async () => {
+      labelReads.push(repo)
+      if (taxonomyThrows) throw taxonomyThrows
+      return taxonomy
+    }
+  }
+
   if (listable) {
     github.listIssues = async (options = {}) => {
       reads.push(options.state || 'open')
@@ -31,6 +46,7 @@ const world = ({
   return {
     posted,
     reads,
+    labelReads,
     coord: CoordService({
       github,
       agent: 'foxtrot-test',
@@ -221,4 +237,104 @@ test('label matching is case-insensitive and tolerates a bare string label', asy
     assert.equal(res.ok, true, `labels ${JSON.stringify(labels)} must resolve`)
     assert.equal(res.hubNumber, 21)
   }
+})
+
+// ── #53 review ask: the refusal must not advise a step GitHub refuses in this repo ──
+// Measured live at ab40bd2: pi-agents' taxonomy is 10 labels with no `hub`, so
+// `gh issue edit --add-label hub` dies with `could not add label` and creates NO artifact. The old
+// sentence offered `label one issue 'hub'` unconditionally.
+
+test('a taxonomy that HAS the hub label keeps advising it - the pitcairn shape', async () => {
+  const w = world({ issues: [], taxonomy: ['bug', 'hub', 'ws:infra'] })
+  const res = await w.coord.hub('a fleet line')
+  assert.equal(res.ok, false, 'no hub ISSUE is open, so it still refuses')
+  assert.equal(w.posted.length, 0, 'a refusal must not have posted')
+  assert.match(res.error, /label one issue 'hub' or set COORD_HUB/, res.error)
+  assert.ok(
+    !/taxonomy has no/.test(res.error),
+    'do not claim the label is missing when it exists',
+  )
+})
+
+test('a taxonomy WITHOUT the hub label points at COORD_HUB first - the pi-agents shape', async () => {
+  const w = world({ issues: [], taxonomy: ['bug', 'enhancement', 'p1'] })
+  const res = await w.coord.hub('a fleet line')
+  assert.match(
+    res.error,
+    /set COORD_HUB=<open issue> - this repo's taxonomy has no 'hub' label/,
+    res.error,
+  )
+  assert.match(
+    res.error,
+    /minting one is a fleet decision: gh label create hub in Sullux\/pi-agents - nothing was posted$/,
+    res.error,
+  )
+  assert.ok(
+    !res.error.includes("unset - label one issue 'hub' or set COORD_HUB"),
+    'the refused instruction must not survive as the advice',
+  )
+  assert.equal(w.posted.length, 0, 'refused means nothing was posted')
+})
+
+test('a taxonomy read that THROWS says unknown, never absent', async () => {
+  const w = world({
+    issues: [],
+    taxonomyThrows: new Error('gh label list failed against Sullux/pi-agents'),
+  })
+  const res = await w.coord.hub('a fleet line')
+  assert.match(res.error, /the label taxonomy could not be read/, res.error)
+  assert.match(res.error, /cannot claim 'hub' is absent/, res.error)
+  assert.ok(
+    !/taxonomy has no 'hub' label/.test(res.error),
+    'an unreadable taxonomy must never be reported as a missing label',
+  )
+  assert.equal(w.posted.length, 0)
+})
+
+test('an older client with no label seam hedges instead of asserting', async () => {
+  const w = world({ issues: [], hasLabelsSeam: false })
+  const res = await w.coord.hub('a fleet line')
+  assert.match(
+    res.error,
+    /label one issue 'hub' if that label exists here/,
+    res.error,
+  )
+  assert.equal(w.labelReads.length, 0, 'no seam means no read attempted')
+})
+
+test('the taxonomy is case-insensitive: a HUB label in the list counts as present', async () => {
+  const w = world({ issues: [], taxonomy: ['HUB', 'bug'] })
+  const res = await w.coord.hub('a fleet line')
+  assert.match(res.error, /label one issue 'hub' or set COORD_HUB/, res.error)
+})
+
+test('non-vacuity: the taxonomy is read ONCE on the refusal path and ZERO times on success', async () => {
+  const miss = world({ issues: [], taxonomy: ['bug'] })
+  await miss.coord.hub('a fleet line')
+  assert.equal(
+    miss.labelReads.length,
+    1,
+    `refusal should read the taxonomy once: ${miss.labelReads}`,
+  )
+  const hit = world({ issues: [hubbed(7)], taxonomy: ['bug', 'hub'] })
+  const res = await hit.coord.hub('a fleet line')
+  assert.equal(res.hubNumber, 7)
+  assert.equal(
+    hit.labelReads.length,
+    0,
+    'a resolved hub must not pay for a taxonomy read',
+  )
+})
+
+test('the whole sentence, as a reader receives it in a repo with no hub label', async () => {
+  const w = world({
+    issues: [],
+    repo: 'Sullux/pi-agents',
+    taxonomy: ['bug', 'docs', 'p1'],
+  })
+  const res = await w.coord.hub('a fleet line')
+  assert.equal(
+    res.error,
+    "hub: no open issue carries the 'hub' label and COORD_HUB is unset - set COORD_HUB=<open issue> - this repo's taxonomy has no 'hub' label to apply, and minting one is a fleet decision: gh label create hub in Sullux/pi-agents - nothing was posted",
+  )
 })

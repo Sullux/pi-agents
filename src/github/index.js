@@ -184,6 +184,18 @@ const GitHubClient = ({
     }
   }
 
+  // #53 review ask: the hub refusal advised `label one issue 'hub'` in repos whose taxonomy has no
+  // `hub` label at all, where `gh issue edit --add-label hub` dies with `could not add label` and
+  // creates nothing - advice GitHub refuses in the exact repo where the message fires. To advise the
+  // exit that WORKS, the refusal has to know the taxonomy. Deliberately throws on a failed read
+  // rather than returning []: an unreadable taxonomy is UNKNOWN, not absent, and the caller says so.
+  const listLabels = async () => {
+    const raw = runGh(['label', 'list', '--json', 'name'])
+    return JSON.parse(raw)
+      .map((l) => (typeof l === 'string' ? l : l?.name))
+      .filter((n) => typeof n === 'string')
+  }
+
   const viewIssue = async (number) => {
     const raw = runGh([
       'issue',
@@ -242,6 +254,7 @@ const GitHubClient = ({
     runGh,
     issueKind,
     listIssues,
+    listLabels,
     viewIssue,
     commentIssue,
     editIssue,
