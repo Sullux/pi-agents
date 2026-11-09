@@ -431,4 +431,82 @@ describe('Runner: #90 review-gap causes, named instead of widened', () => {
       ],
     )
   })
+
+  // #93: two bodies differing by ONE appended sentence. Arm A is the fired-proof that the currency matcher
+  // engaged at all - if the fixture were invisible to the matcher both arms would read `unreviewed`, which is a
+  // harness bug wearing a green result (the issue's own first attempt hit exactly that with `agent: pi/charlie`,
+  // which matches no verdict header). Arm B is the defect: a sha written in prose flips a stale verdict to
+  // "reviewed" under a bare `includes(shortSha)`.
+  const CURRENT_HEAD = 'f3e6adff5c1b2d3e4f5a6b7c8d9e0f1a2b3c4d5e'
+  const STALE_VERDICT =
+    '**REVIEW** | agent: agent-charlie | verdict: APPROVE | head `aaa0d12`'
+  const MOVED_PROSE =
+    'Main has since moved to f3e6adf, so re-measure before merging.'
+
+  it('arm A (fired-proof): a verdict naming a dead head is stale, no prose involved', () => {
+    const pr = prAt(CURRENT_HEAD, [
+      `${STALE_VERDICT}\n\nls-remote == headRefOid == aaa0d12.`,
+    ])
+    assert.equal(isPrReviewedByAgent(pr, 'charlie'), false)
+    assert.equal(prReviewGap(pr, 'charlie').gap, 'stale-head-verdict')
+  })
+
+  it('arm B: the same verdict plus a PROSE mention of the new head stays stale (#93)', () => {
+    const pr = prAt(CURRENT_HEAD, [
+      `${STALE_VERDICT}\n\nls-remote == headRefOid == aaa0d12.\n\n${MOVED_PROSE}`,
+    ])
+    assert.equal(
+      isPrReviewedByAgent(pr, 'charlie'),
+      false,
+      'a sha inside a sentence is not the head attested',
+    )
+    const gap = prReviewGap(pr, 'charlie')
+    assert.equal(gap.gap, 'stale-head-verdict')
+    assert.match(
+      gap.hint,
+      /`aaa0d12`/,
+      'the hint must name the attested head, not the one quoted in prose',
+    )
+  })
+
+  it('a verdict naming NO head keeps the substring read (#93 box 2, the fallback)', () => {
+    // Pre-#89 hand-shaped attestations carry no token the writer produced. Requiring one would newly report a
+    // hundred correctly-reviewed threads as unreviewed - the false-negative direction, work vanishing off the
+    // board. This arm is the pin that clause is deliberate: if someone drops the fallback the second assert
+    // reddens while the first stays green.
+    const namesCurrent = `**REVIEW** | agent: agent-charlie | verdict: APPROVE | measured at ${CURRENT_HEAD.slice(0, 7)} on top of 91aaeee`
+    assert.equal(
+      isPrReviewedByAgent(prAt(CURRENT_HEAD, [namesCurrent]), 'charlie'),
+      true,
+    )
+    assert.equal(
+      prReviewGap(prAt(CURRENT_HEAD, [namesCurrent]), 'charlie').gap,
+      'reviewed',
+    )
+    const namesOther =
+      '**REVIEW** | agent: agent-charlie | verdict: APPROVE | measured at 91aaeee'
+    assert.equal(
+      isPrReviewedByAgent(prAt(CURRENT_HEAD, [namesOther]), 'charlie'),
+      false,
+      'the fallback is a substring read, not a pass',
+    )
+  })
+
+  it('the witness site is currency-checked too - the third includes(shortSha)', () => {
+    // The regex takes the FIRST head token, so the attested (stale) head leads and the current sha sits in
+    // prose after it: under the old substring read this witness looked current and produced
+    // `non-verdict-attestation`; under the named-head rule it is evidence about an older tree and the thread
+    // is simply still owed a verdict.
+    const staleWitness = `**NON-SELF WITNESS for box 5** | agent: agent-charlie | head \`a029d24\` | ${MOVED_PROSE}`
+    assert.equal(
+      prReviewGap(prAt(CURRENT_HEAD, [staleWitness]), 'charlie').gap,
+      'unreviewed',
+    )
+    // positive control: the same witness naming the CURRENT head still reads as the attestation it is
+    const liveWitness = `**NON-SELF WITNESS for box 5** | agent: agent-charlie | head \`${CURRENT_HEAD.slice(0, 7)}\``
+    assert.equal(
+      prReviewGap(prAt(CURRENT_HEAD, [liveWitness]), 'charlie').gap,
+      'non-verdict-attestation',
+    )
+  })
 })
