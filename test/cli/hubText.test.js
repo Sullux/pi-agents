@@ -217,6 +217,58 @@ describe('coord hub placeholder refusal (#29 guard 1)', () => {
     }
   })
 
+  // #69 box 2, driven at the extractor itself rather than only through HubText: the pair below
+  // grades the composed refusal, so an edit that kept HubText's message shape while breaking
+  // the table would still pass there. This arm reads findPlaceholder's own return value, and
+  // the clean-line floor proves that an empty string means "no placeholder" rather than
+  // "the extractor answers nothing at all".
+  it('findPlaceholder refuses the slot table and posts the prose table (#69)', () => {
+    const { findPlaceholder } = require('../../src/cli/hubText')
+    assert.equal(
+      findPlaceholder('merged green at 15:26:03Z on main'),
+      '',
+      'a clean line must yield no hit',
+    )
+    for (const slot of [
+      '<n>',
+      '<num>',
+      '<number>',
+      '<issue>',
+      '<pr>',
+      '<sha>',
+      '<path>',
+      '<file>',
+      '<issue 5>',
+      '<number of rows>',
+      '<sha abc123>',
+      '<path to config>',
+    ]) {
+      assert.notEqual(
+        findPlaceholder(`verified with ${slot} on main`),
+        '',
+        `${slot} is a slot and must still refuse`,
+      )
+    }
+    for (const prose of [
+      '<name>',
+      '<node>',
+      '<nil>',
+      '<null>',
+      '<pristine>',
+      '<refactor>',
+      '<oidc>',
+      '<issueCount>',
+      '<filename>',
+      '<directory>',
+    ]) {
+      assert.equal(
+        findPlaceholder(`the pane reports ${prose} for that row`),
+        '',
+        `${prose} is prose in angle brackets, not a slot`,
+      )
+    }
+  })
+
   // The discriminator, tested in BOTH directions on the same token so the arm cannot be
   // satisfied by narrowing the pattern until nothing refuses: token then `>` is a slot, token
   // then whitespace then filler is a slot awaiting a value, token then more word characters is
