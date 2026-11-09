@@ -469,9 +469,14 @@ const Cli = ({
           stderr(posted.error)
           return 1
         }
-        // #53: print the repo the POST went through, not this command's workspace
-        // client - the two resolve differently whenever the hub lives in another repo,
-        // which is how a write into pi-agents #4 reported success against pitcairn.
+        // #53: print the repo the POST went through. `GitHubClient`'s `resolveRepo` takes the repo
+        // option (`--repo`), then `COORD_REPO`, then `GH_REPO`, then the cwd's origin probe, and
+        // `COORD_HUB` unset used to mean the literal issue 4 - so the same verb run from two
+        // worktrees can post the same number into two different repos. The success line names
+        // `posted.repo`, which is the client that made the write, so the line is evidence about the
+        // write rather than about the workspace. Measured as a deterministic A/B in PR #64 on
+        // 2026-11-09: main `88d7c4a` posted and moved pi-agents #4 from 13 comments to 14; this
+        // head refused with rc=1 and left it at 13.
         stdout(
           `Posted to hub #${posted.hubNumber} @${posted.repo || 'unresolved (gh cwd default)'}`,
         )
