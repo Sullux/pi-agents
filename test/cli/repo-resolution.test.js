@@ -14,23 +14,26 @@ const { GitHubClient } = require('../../src/github/index.js')
 // form first proposed in the issue (`Marked Sullux/pi-agents#21 done`) breaks `/Claimed #999999/` and
 // `/Posted to hub #\d+/`, and loosening three unrelated pins to fund a wording change is a bad trade.
 
-const okCoord = {
+// #53: hub() now reports the repo the POST went through, and the CLI prints THAT -
+// so the fake has to answer with a repo too. Built per harness because the repo is
+// what these arms vary.
+const okCoordFor = (repo) => ({
   claim: async () => ({ ok: true, warnings: [] }),
   release: async () => ({ ok: true }),
   status: async () => ({ ok: true }),
   review: async () => ({ ok: true }),
   done: async () => ({ ok: true }),
-  hub: async () => ({ ok: true, hubNumber: 4 }),
+  hub: async () => ({ ok: true, hubNumber: 4, repo }),
   board: async () => 'BOARD',
   sync: async () => 'SYNC',
-}
+})
 
 const harness = (repo) => {
   const out = []
   const err = []
   const cli = Cli({
     github: { repo },
-    coordFactory: () => okCoord,
+    coordFactory: () => okCoordFor(repo),
     provenance: { describe: () => 'DESCRIBE', note: () => '' },
     stdout: (line) => out.push(line),
     stderr: (line) => err.push(line),

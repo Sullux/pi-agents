@@ -123,7 +123,8 @@ const HubText =
       return {
         error:
           `hub takes no issue-number positional - \`${targetOnly}\` would have been posted ` +
-          'as message text alongside the file or --body. The hub is COORD_HUB (default 4) ' +
+          'as message text alongside the file or --body. The hub is COORD_HUB, else the ' +
+          'lowest-numbered open issue labelled `hub`, ' +
           'and is not selectable per call; drop the number, or make it part of your ' +
           'sentence. Nothing was posted.\n' +
           HUB_USAGE,
