@@ -35,12 +35,22 @@ const firstLine = (value) =>
 const errorCause = (err) => firstLine(err?.stderr ?? err?.message ?? err)
 
 // Error text only - the spawn always receives the real array.
+// Two shapes carry a payload: the space form this client builds today (`--body`, value) and the equals form
+// (`--body=value`) that `gh` also accepts. Redacting only the token AFTER a flag would turn a future switch of
+// spelling into a silent leak, and the count stays per-value in both forms so the argv remains countable.
 const safeArgv = (args = []) =>
-  args.map((arg, i) =>
-    PAYLOAD_FLAGS.includes(args[i - 1])
+  args.map((arg, i) => {
+    const inline = PAYLOAD_FLAGS.find((flag) =>
+      String(arg).startsWith(`${flag}=`),
+    )
+    if (inline) {
+      const value = String(arg).slice(inline.length + 1)
+      return `${inline}=<${value.length} chars redacted>`
+    }
+    return PAYLOAD_FLAGS.includes(args[i - 1])
       ? `<${String(arg).length} chars redacted>`
-      : arg,
-  )
+      : arg
+  })
 
 const GitHubClient = ({
   execFile = execFileSync,
@@ -122,7 +132,13 @@ const GitHubClient = ({
   // `pull_request` key exists exactly for PRs - so this goes through `gh api`, which is also the one
   // gh subcommand that refuses `--repo` (measured: `unknown flag: --repo` + the whole help text),
   // hence a separate spawn that carries the resolved slug in the endpoint path instead.
+  // #57: this is the second path to `gh`, and `runGh`'s guard did not cover it - `gh api` rejects `--repo`
+  // (measured: `unknown flag: --repo`), so the slug lives in the endpoint, and with no repo resolved that
+  // endpoint was `repos//issues/N`: still spawned, still answered `gh: Not Found (HTTP 404)` on the terminal,
+  // right under a message promising that nothing was sent. The promise has to hold about reads as well as
+  // writes, or #41 is only half fixed.
   const ghApi = async (endpoint, jq) => {
+    if (!activeRepo) throw noRepoError()
     const result = execFile('gh', ['api', endpoint, '--jq', jq], {
       cwd,
       encoding: 'utf8',
