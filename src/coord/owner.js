@@ -17,9 +17,27 @@ const markerOf = (body = '') => {
   return match ? match[1] : ''
 }
 
+// Two shapes, tried in this order, and the order is the safety property.
+//
+// `STRICT` is the form `claim` writes: a `|`-delimited field. It wins whenever it matches,
+// which is what stops a body that QUOTES a peer's claim line after its own field from being
+// re-attributed to the quoted peer (pinned). `LINE` is the fallback for a hand-authored
+// claim - the field at the start of a line, with no pipe in front of it, either because the
+// writer put an extra field first or because the field wrapped to a continuation line.
+// Without the fallback an unparseable field silently means "nobody claimed this", which
+// reads on the board and in the scope gate as free (#49).
+const AGENT_STRICT = /\|\s*agent:\s*([^|\n]+)/
+// Optional leading marker so `**CLAIM** agent: X` (no pipe at all) resolves too, and an
+// optional list bullet. `RELEASE`/`DONE` bodies that merely mention an agent in prose do not
+// match, because they still need the literal `agent:` token in field position.
+const AGENT_LINE =
+  /^[ \t]*(?:\*\*[A-Z]+\*\*[ \t]*(?:\|[ \t]*)?)?(?:[-*] )?agent:[ \t]*([^\s|]+)/m
+
 const agentOf = (body = '') => {
-  const match = body.match(/\|\s*agent:\s*([^|\n]+)/)
-  return match ? cleanAgent(match[1]) : ''
+  const strict = body.match(AGENT_STRICT)
+  if (strict) return cleanAgent(strict[1])
+  const line = body.match(AGENT_LINE)
+  return line ? cleanAgent(line[1]) : ''
 }
 
 const targetOf = (body = '') => {
@@ -48,11 +66,18 @@ const targetOf = (body = '') => {
 // written on the issue, so it clears. race.js is stricter in exactly that case - it disarms
 // per-agent, so an unattributed marker frees nobody - which is a DELIBERATE divergence, not
 // an oversight: see the reconciliation note in race.js's header.
+// A CLAIM or HANDOFF we cannot read must not move ownership.
+//
+// Clearing on an unreadable line is the dangerous direction: `checkScopeCollision` does
+// `if (!owner) continue`, so the files under that claim stop being fenced for everyone else,
+// and the board's OWNER column renders `-`. `RELEASE`/`DONE` keep clearing when
+// unattributed - that is the documented divergence in race.js's header and three existing
+// pins depend on it - because a close-out is the last word written on an issue.
 const applyMarker = (owner, body) => {
   const kind = markerOf(body)
   const agent = agentOf(body)
-  if (kind === 'CLAIM') return agent
-  if (kind === 'HANDOFF') return targetOf(body)
+  if (kind === 'CLAIM') return agent || owner
+  if (kind === 'HANDOFF') return targetOf(body) || owner
   if (kind === 'RELEASE' || kind === 'DONE')
     return !agent || agent === owner ? '' : owner
   return owner
@@ -85,6 +110,19 @@ const hasClaimBy = (comments = [], agent = '') => {
   )
 }
 
+// The residual case: a protocol marker whose identity field no parser could recover. It is
+// NOT the same thing as "nobody claimed this", and callers need to be able to say so instead
+// of quietly treating the issue as free. Empty array means every marker resolved.
+const unresolvedProtocolLines = (comments = []) =>
+  (comments || [])
+    .map((c) => c.body?.trim() || '')
+    .filter((body) => {
+      const kind = markerOf(body)
+      if (kind === 'CLAIM') return agentOf(body) === ''
+      if (kind === 'HANDOFF') return targetOf(body) === ''
+      return false
+    })
+
 module.exports = {
   cleanAgent,
   markerOf,
@@ -92,4 +130,5 @@ module.exports = {
   ownerOf,
   isMine,
   hasClaimBy,
+  unresolvedProtocolLines,
 }
