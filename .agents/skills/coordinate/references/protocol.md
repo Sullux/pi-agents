@@ -32,7 +32,7 @@ then a free-form body:
 | --- | --- | --- | --- |
 | `CLAIM` | Core | Assign self; `status:claimed` | Plan plus `branch:`, `pr:`, or `no-code-yet` |
 | `RELEASE` | Core | Unassign; `status:unclaimed` | Reason; stale releases cite the unanswered ping |
-| `STATUS` | Core | `status:claimed` becomes `in-progress` | Milestone, next step, or unblock context |
+| `STATUS` | Core | Comments only — the shipped helper writes no label (`applyLabels` has exactly four call sites, and `status` is not one of them) | Milestone, next step, or unblock context |
 | `BLOCKED` | Core | `status:blocked` | `by:` `#n` or `@user`, and the required action |
 | `QUESTION` | Core | `needs-human` if `--human` | Question and `to:` |
 | `ANSWER` | Core | Removes `needs-human` | Answer |
@@ -49,6 +49,13 @@ then a free-form body:
 
 The active heartbeat verbs are `CLAIM`, `STATUS`, and `HANDOFF`. Current
 helpers also recognize `UNBLOCKED` for backward compatibility.
+
+Label side effects are **taxonomy-dependent**, so the column above describes repos that carry
+the `status:*` family. In a repo whose `gh label list` has no `status:*` labels — `Sullux/pi-agents`
+is one — the four mutating verbs skip the write that cannot succeed and print a notice line instead
+(#79); the `**CLAIM**` / `**REVIEW**` / `**DONE**` comments remain the authoritative record either way.
+A success-shaped stdout in a label-less repo is therefore never evidence of a state change, which is
+the failure #44 was filed against.
 
 ## Required invariants
 
