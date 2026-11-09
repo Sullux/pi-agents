@@ -315,3 +315,100 @@ describe('scope gate #77: the advice an overlap carries is the advice an agent r
     )
   })
 })
+
+// #83: `unheld` was doing double duty for "nobody has this" and "someone clearly has this, and the
+// comment that would prove it is missing". The second one got the sentence "claim it first if you
+// mean to own it" while a PR was open against it - the gate was right to warn and wrong about what
+// the warning meant. Measured live: pitcairn #1180 / #1182 / #1187 all sat labelled with zero
+// parseable CLAIM lines, two of them with an open PR.
+
+const adviceOf = async (rivalLabels, rivalComments = []) => {
+  const h = claimHarness({ rivalLabels, rivalComments })
+  const { CoordService } = require('../../src/coord')
+  const coord = CoordService({
+    github: h.github(),
+    agent: 'bravo',
+    human: 'Sullux',
+    now: () => 1700000000000,
+  })
+  const res = await coord.claim(1171, { plan: 'p', eta: '10m' })
+  return {
+    res,
+    advice: res.warnings?.[0]?.advice,
+    bullet: h.posted[0]?.split('\n').find((l) => l.startsWith('- #1179')),
+  }
+}
+
+describe('scope gate #83: held-but-unattributable is not the same advice as free', () => {
+  it('a rival labelled status:claimed with no CLAIM line is told to read the thread, not to claim it', async () => {
+    const { res, advice, bullet } = await adviceOf([{ name: 'status:claimed' }])
+    assert.equal(res.ok, true, 'advice text does not fence anything')
+    assert.ok(advice, 'the warning carries advice')
+    assert.match(advice, /do not claim it blind/)
+    assert.ok(
+      !/claim it first/.test(advice),
+      'the invitation to claim a held issue is gone',
+    )
+    assert.ok(
+      advice.includes('labelled claimed'),
+      `the label is echoed, not guessed: ${advice}`,
+    )
+    assert.match(
+      bullet,
+      /do not claim it blind/,
+      'and the RENDERED bullet says it too',
+    )
+  })
+
+  it('every held label reaches the same branch, including one written by a human in mixed case', async () => {
+    for (const [label, note] of [
+      ['status:in-progress', 'a live edit'],
+      ['status:blocked', 'parked work'],
+      [
+        'status:Claimed',
+        'case-folded by #78, so the fold is load-bearing here',
+      ],
+    ]) {
+      const { advice } = await adviceOf([{ name: label }])
+      assert.match(
+        advice || '',
+        /do not claim it blind/,
+        `${label} (${note}) got: ${advice}`,
+      )
+      assert.ok(
+        !/claim it first/.test(advice || ''),
+        `${label} must not invite a blind claim`,
+      )
+    }
+  })
+
+  it('a genuinely free rival keeps the old sentence - the fix must not swallow the true case', async () => {
+    for (const labels of [[], [{ name: 'status:unclaimed' }]]) {
+      const { advice } = await adviceOf(labels)
+      assert.match(
+        advice || '',
+        /no claim yet/,
+        `free issue ${JSON.stringify(labels)}: ${advice}`,
+      )
+      assert.ok(
+        !/do not claim it blind/.test(advice || ''),
+        'and it is NOT described as held',
+      )
+    }
+  })
+
+  it('a held rival WITH a parseable CLAIM still gets the rebase sentence, unchanged', async () => {
+    const { advice } = await adviceOf(
+      [{ name: 'status:in-review' }],
+      [{ body: '**CLAIM** | agent: agent-delta | at: 1' }],
+    )
+    assert.match(
+      advice || '',
+      /rebase owed after it merges \(status:in-review\)/,
+    )
+    assert.ok(
+      !/do not claim it blind/.test(advice || ''),
+      'owner is derivable, so this is not the #83 case',
+    )
+  })
+})

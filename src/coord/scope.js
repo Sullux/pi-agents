@@ -204,10 +204,22 @@ const SOFT_STATUSES = ['in-review']
 // exported builder would still have left the two call sites free to disagree.
 const UNHELD_AGENT = 'nobody'
 
-const warningAdvice = (warning) =>
-  warning.unheld
-    ? 'no claim yet: coordinate before both edit, or claim it first if you mean to own it'
-    : `rebase owed after it merges (status:${warning.status})`
+// #83: `unheld` alone conflates two different states. A truly free issue (no `status:*` label, or
+// `status:unclaimed`) has nobody to coordinate with yet. An issue labelled `claimed`, `in-progress`,
+// `in-review` or `blocked` whose owner `ownerOf` cannot derive is HELD and merely unattributable - the
+// label write and the CLAIM comment are two separate writes and only one of them is checked, so a
+// hand-set label, a CLAIM line that failed to parse, or the GraphQL issue-resolution failure all leave
+// a live edit invisible. Measured 2026-11-09: pitcairn #1180 / #1182 / #1187 sat in exactly that state,
+// two of them with open PRs, while the advice told a claimant to "claim it first".
+const HELD_STATUSES = ['claimed', 'in-progress', 'in-review', 'blocked']
+
+const warningAdvice = (warning) => {
+  if (!warning.unheld)
+    return `rebase owed after it merges (status:${warning.status})`
+  return HELD_STATUSES.includes(warning.status)
+    ? `labelled ${warning.status} but no parseable CLAIM/HANDOFF line: read its comments and any open PR before editing, do not claim it blind`
+    : 'no claim yet: coordinate before both edit, or claim it first if you mean to own it'
+}
 
 const checkScopeCollision = (
   targetFiles = [],
