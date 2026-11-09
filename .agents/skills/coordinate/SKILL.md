@@ -245,7 +245,7 @@ enforcement. See the
 | `question N [--to @u] [--human] "text"` / `answer N "text"` | Ask / answer; `--human` adds needs-human |
 | `propose N [--to @u] "text"` / `accept N ["text"]` / `counter N "text"` / `reject N "reason"` | Negotiate |
 | `handoff N --to @user "text"` | Transfer ownership |
-| `review N --pr N` | Mark in-review after the caller verifies PR scope. `--pr` takes the PR NUMBER (rendered `pr: #N`), not a URL |
+| `review N --pr N` | Mark in-review after the caller verifies PR scope. `--pr` takes the PR NUMBER (rendered `pr: #N`), not a URL. Since #88 one call writes ONE verdict to TWO surfaces - the issue comment and the PR thread - so a grep for `**REVIEW**` across a joined issue + PR timeline double-counts; protocol state is unaffected, because `ownerOf` and the board read the issue comment only (#89) |
 | `done N [--pr URL] ["text"]` | Close after the caller verifies criteria and merge state |
 | `stale` | Claims silent longer than `COORD_STALE_MIN` (default 45; sprint 30) |
 | `show N` | Print an issue with its structured comment history |
