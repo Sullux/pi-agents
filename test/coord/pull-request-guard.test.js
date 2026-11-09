@@ -64,6 +64,7 @@ const recorder = ({
       writes.push(['comment', number, body])
       return ''
     },
+    commentPr: async () => '',
     editIssue: async (number, opts = {}) => {
       writes.push(['edit', number, opts])
       return ''
