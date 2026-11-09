@@ -218,6 +218,7 @@ command is not evidence that the gates passed.
 
 | Invariant | Current behavior |
 | --- | --- |
+| Board STATUS | `status:*` label when the issue has one; otherwise derived from the protocol timeline (`CLAIM`/`HANDOFF` -> `claimed`, `RELEASE`/self-`DONE` -> `unclaimed`, `REVIEW` -> `in-review`) and announced in a footer, because a repo may carry no `status:*` labels at all (pi-agents#66) |
 | Canonical hub | `COORD_HUB` when set, else the lowest-numbered open issue labelled `hub` |
 | Claim file scope | Enforced on `claim`: `parseScope` reads the issue's `## Files`, `checkScopeCollision` refuses a real overlap and exits 1 |
 | Review file scope | Manual comparison against the union of linked issue scopes |
