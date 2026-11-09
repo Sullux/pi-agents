@@ -227,7 +227,7 @@ test('COORD_HUB pointing at a closed target: sync names the repo and the reason,
   })
 })
 
-test('a service sync never renders the formatter fallback - one resolver feeds both paths', async () => {
+test('a service sync with COORD_HUB UNSET resolves by label and never renders the formatter fallback', async () => {
   const w = world({ issues: [row(9, { hub: true })] })
   await withHub(undefined, async () => {
     const out = await w.coord.sync()
@@ -316,4 +316,92 @@ test('a taxonomy that DOES carry the label gets the label advice, still from one
       'no second copy of the instruction',
     )
   })
+})
+
+// ── #67 review ask (Alpha): an invalid COORD_HUB must not let the read path substitute its own answer ──
+// `pi/13` is not hypothetical: `COORD_HUB=<workspace>/<number>` is a mistake this fleet has made and
+// recorded. Before the fix the board answered that value with a hub it had re-resolved itself, and the
+// reason line was unreachable because it only printed in the no-hub branch, which the fallback avoided.
+
+for (const declared of ['pi/13', '0', '-4', 'null']) {
+  test(`COORD_HUB=${declared} with a REAL labelled hub in the rows: the board refuses, it does not substitute`, async () => {
+    const w = world({
+      issues: [row(4, { hub: true }), row(9)],
+      repo: 'Sullux/test',
+    })
+    await withHub(declared, async () => {
+      const out = await w.coord.sync()
+      assert.match(
+        out,
+        /== no hub in Sullux\/test - the hub tail is skipped ==/,
+        tailLine(out),
+      )
+      assert.match(
+        out,
+        /is not a positive integer issue number/,
+        out.split('\n').slice(-3).join('\n'),
+      )
+      assert.ok(
+        !out.includes('== hub #4'),
+        `the board invented a target for COORD_HUB=${declared}`,
+      )
+      assert.ok(
+        !out.includes('formatter fallback'),
+        'a refused env must not reach the fallback',
+      )
+      assert.equal(w.posted.length, 0)
+    })
+  })
+}
+
+test('both paths answer an invalid COORD_HUB with the SAME sentence - the contract #65 exists to close', async () => {
+  const w = world({ issues: [row(4, { hub: true })], repo: 'Sullux/test' })
+  await withHub('pi/13', async () => {
+    const refused = await w.coord.hub('a fleet line')
+    assert.equal(refused.ok, false)
+    const out = await w.coord.sync()
+    assert.ok(
+      out.includes(`  ${refused.error}`),
+      `the board must carry the write path\'s refusal verbatim:\n--- board ---\n${out.slice(-500)}\n--- refusal ---\n${refused.error}`,
+    )
+  })
+})
+
+test('COORD_HUB naming a closed target, while a labelled hub sits in the rows: still no substitution', async () => {
+  const w = world({ issues: [row(4, { hub: true })], repo: 'Sullux/test' })
+  await withHub('9', async () => {
+    const out = await w.coord.sync()
+    assert.match(out, /== no hub in Sullux\/test/, tailLine(out))
+    assert.match(
+      out,
+      /cannot receive a hub line/,
+      out.split('\n').slice(-3).join('\n'),
+    )
+    assert.ok(
+      !out.includes('== hub #4'),
+      'a valid-but-unusable env must not fall back to the label',
+    )
+  })
+})
+
+test('the formatter treats a missing target and a refused target as different inputs', () => {
+  const issues = [row(4, { hub: true })]
+  const noTarget = formatSync({ issues, repo: 'Sullux/x' })
+  assert.match(
+    noTarget,
+    /== hub #4 \(the 'hub' label \(formatter fallback\)\)/,
+    tailLine(noTarget),
+  )
+  const refused = formatSync({
+    issues,
+    hub: null,
+    hubReason: 'COORD_HUB="pi/13" is unusable',
+    repo: 'Sullux/x',
+  })
+  assert.match(refused, /== no hub in Sullux\/x/, tailLine(refused))
+  assert.ok(refused.includes('  COORD_HUB="pi/13" is unusable'), refused)
+  assert.ok(
+    !refused.includes('== hub #4'),
+    'null is an answer, not an absence of one',
+  )
 })

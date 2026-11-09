@@ -144,6 +144,14 @@ const hubNumberFromLabel = (issues) => {
 }
 
 const locateHub = (issues, hub) => {
+  // #67 review ask (Alpha): `undefined` and `null` are DIFFERENT facts and must not share a branch.
+  // Undefined means the caller never resolved anything, so the label fallback below is the only way to
+  // name a hub. Null means the resolver RAN and answered "there is no usable hub" - and re-resolving
+  // there is how the board substituted its own target for one the write path had refused: with
+  // `COORD_HUB=pi/13` (a shape this fleet has actually recorded) and a real labelled #4 in the rows,
+  // `sync` printed `hub #4 (the 'hub' label (formatter fallback))` while `hub()` refused the same
+  // value outright. Honour the refusal; its sentence travels in `hubReason`.
+  if (hub === null) return { number: null, issue: undefined, via: '' }
   const wanted = hub?.number ? Number(hub.number) : hubNumberFromLabel(issues)
   if (!isIssueNumber(wanted)) return { number: null, issue: undefined, via: '' }
   // Naming WHICH path produced the number is the point: `sync` always passes a target, so a tail
@@ -160,7 +168,12 @@ const formatSync = ({
   issues = [],
   currentAgent = '',
   repo = '',
-  hub = null,
+  // #67 review ask: deliberately NO default on `hub`. `undefined` means "the caller never resolved a
+  // hub" (the label fallback is the legitimate answer); `null` means "the resolver ran and refused
+  // one" (the board must honour that, not re-resolve). A `hub = null` default collapses the two and
+  // turns every direct formatter call into a refusal - the same conflation the locateHub guard
+  // removes, smuggled in one layer up.
+  hub,
   hubReason = '',
   staleMinutes = 45,
   now = Date.now(),
