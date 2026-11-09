@@ -204,10 +204,31 @@ const SOFT_STATUSES = ['in-review']
 // exported builder would still have left the two call sites free to disagree.
 const UNHELD_AGENT = 'nobody'
 
-const warningAdvice = (warning) =>
-  warning.unheld
-    ? 'no claim yet: coordinate before both edit, or claim it first if you mean to own it'
-    : `rebase owed after it merges (status:${warning.status})`
+// #83: `unheld` alone conflates two different states. A truly free issue (no `status:*` label, or
+// `status:unclaimed`) has nobody to coordinate with yet. An issue labelled `claimed`, `in-progress`,
+// `in-review` or `blocked` whose owner `ownerOf` cannot derive is HELD and merely unattributable - the
+// label write and the CLAIM comment are two separate writes and only one of them is checked, so a
+// hand-set label, a CLAIM line that failed to parse, or the GraphQL issue-resolution failure all leave
+// a live edit invisible. The state is CONSTRUCTED here, not observed, and the pair that discriminates it
+// runs on the SOFT status #863 introduced: an issue labelled status:in-review carrying a parseable CLAIM
+// warns `rebase owed after it merges`, and the same issue with that one line removed warns `labelled
+// in-review but no parseable CLAIM/HANDOFF line ... do not claim it blind` - two distinct strings off one
+// label, separated only by the timeline. A `claimed` overlap with a derivable owner is not a warning at
+// all: checkScopeCollision answers hasCollision, the pre-existing hard refusal, which is why the middle
+// advice is only reachable where the gate lets the claim through. Counted at pitcairn `1acfecc` and
+// pi-agents `68dc81a` (2026-11-09) the live board held ZERO instances: pitcairn had 6 open issues, 2
+// held-labelled and both derive an owner; pi-agents had 3 open, none held-labelled. Nothing is cited by
+// issue number, because a reader cannot re-find the state and a citation that greps empty reads to the
+// next person as decoration rather than evidence.
+const HELD_STATUSES = ['claimed', 'in-progress', 'in-review', 'blocked']
+
+const warningAdvice = (warning) => {
+  if (!warning.unheld)
+    return `rebase owed after it merges (status:${warning.status})`
+  return HELD_STATUSES.includes(warning.status)
+    ? `labelled ${warning.status} but no parseable CLAIM/HANDOFF line: read its comments and any open PR before editing, do not claim it blind`
+    : 'no claim yet: coordinate before both edit, or claim it first if you mean to own it'
+}
 
 const checkScopeCollision = (
   targetFiles = [],
