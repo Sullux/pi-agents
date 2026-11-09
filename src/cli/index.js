@@ -498,6 +498,13 @@ const Cli = ({
       // those lines byte-for-byte. It carries gh's own sentence, not a paraphrase: the exact text
       // is what tells an operator to either create the label or stop expecting the board to move.
       const reportLabels = (res) => {
+        // #79: a repo with no `status:` family never attempts the write, so there is no gh refusal
+        // to quote - but printing NOTHING here would break #34's contract (a partial state has to
+        // be heard). So it prints the accurate fact instead of the accurate error.
+        if (res.labelNotice) {
+          stdout(`  · ${res.labelNotice}`)
+          return
+        }
         if (!res.labelWarning) return
         stdout(
           `  ! labels unchanged: ${res.labelWarning} - the protocol comment on this issue is the record`,
@@ -513,7 +520,11 @@ const Cli = ({
       // true and simply waits for the caveat to land first. `claim` and `release` keep the old order:
       // the action they name is the protocol comment, which landed regardless of the label (Rule C).
       const reviewLine = (number, target, res) => {
-        if (!res.labelWarning) {
+        // #79: `labelNotice` belongs in this test alongside `labelWarning`. #44's rule is that
+        // `review`'s ONLY transition is the label, so a run that skipped the write has not moved
+        // the board either - printing `Moved #71 to in-review` would be the exact false headline
+        // #44 was filed for, arrived at by a different route (no attempt rather than a failed one).
+        if (!res.labelWarning && !res.labelNotice) {
           stdout(`Moved #${number} to in-review @${target}`)
           return
         }
