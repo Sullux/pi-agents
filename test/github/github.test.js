@@ -154,6 +154,18 @@ const withCleanRepoEnv = (fn) => {
   }
 }
 
+// Returns the thrown message, or null when nothing threw. An assert.fail placed in the same try as
+// the call is caught by that try's own handler, so the arm would then judge the AssertionError's
+// text instead of the client's - which is how a vacuous pass gets published as coverage.
+const captureThrow = (fn) => {
+  try {
+    fn()
+  } catch (err) {
+    return err?.message ?? String(err)
+  }
+  return null
+}
+
 describe('repo resolution and error attribution (#41)', () => {
   it('names the git probe as the cause, not the gh call', () =>
     withCleanRepoEnv(() => {
@@ -181,20 +193,25 @@ describe('repo resolution and error attribution (#41)', () => {
 
   it('the refusal cannot be satisfied by echoing the payload', () =>
     withCleanRepoEnv(() => {
-      const client = GitHubClient({ execFile: probeThrows(), cwd: '/nope' })
+      const calls = []
+      const client = GitHubClient({ execFile: probeThrows(calls), cwd: '/nope' })
+      // The throw is captured, not asserted inside the try: an assert.fail in that try is caught
+      // by its own handler, so pre-fix code that simply returned would pass this arm vacuously.
+      let message = null
       try {
         client.runGh(['issue', 'comment', '4', '--body', SECRET_BODY])
-        assert.fail('expected a throw')
       } catch (err) {
-        assert.ok(
-          !err.message.includes(SECRET_BODY),
-          'the whole body leaked into the error text',
-        )
-        assert.ok(
-          !err.message.includes('SENSITIVE-HUB-BODY'),
-          'a fragment of the body leaked into the error text',
-        )
+        message = err.message
       }
+      assert.ok(message !== null, 'expected a throw, got none')
+      assert.ok(
+        !message.includes(SECRET_BODY),
+        'the whole body leaked into the error text',
+      )
+      assert.ok(
+        !message.includes('SENSITIVE-HUB-BODY'),
+        'a fragment of the body leaked into the error text',
+      )
     }))
 
   it('spawns only the probe when there is no repo - gh is never reached', () =>
@@ -214,16 +231,14 @@ describe('repo resolution and error attribution (#41)', () => {
   it('quotes an unusable remote answer instead of swallowing it', () =>
     withCleanRepoEnv(() => {
       const client = GitHubClient({
-        execFile: (cmd) => (cmd === 'git' ? '/srv/repos/local-mirror.git' : '{}'),
+        execFile: (cmd) =>
+          cmd === 'git' ? '/srv/repos/local-mirror.git' : '{}',
         cwd: '/x',
       })
-      try {
-        client.runGh(['issue', 'view', '4'])
-        assert.fail('expected a throw')
-      } catch (err) {
-        assert.match(err.message, /not a GitHub origin/)
-        assert.match(err.message, /\/srv\/repos\/local-mirror\.git/)
-      }
+      const message = captureThrow(() => client.runGh(['issue', 'view', '4']))
+      assert.ok(message !== null, 'expected a throw, got none')
+      assert.match(message, /not a GitHub origin/)
+      assert.match(message, /\/srv\/repos\/local-mirror\.git/)
     }))
 
   it('honors COORD_REPO when the probe would fail', () => {
@@ -288,22 +303,21 @@ describe('repo resolution and error attribution (#41)', () => {
         },
         cwd: '/x',
       })
-      try {
-        client.runGh(['issue', 'comment', '4', '--body', SECRET_BODY])
-        assert.fail('expected a throw')
-      } catch (err) {
-        assert.match(err.message, /gh issue comment failed against Sullux\/pi-agents/)
-        assert.match(err.message, /Issue not found \(HTTP 422\)/)
-        assert.ok(
-          !err.message.includes(SECRET_BODY),
-          'the body leaked into a gh-failure message too',
-        )
-        assert.match(
-          err.message,
-          new RegExp(`--body <${SECRET_BODY.length} chars redacted>`),
-          'the argv must stay countable without being readable',
-        )
-      }
+      const message = captureThrow(() =>
+        client.runGh(['issue', 'comment', '4', '--body', SECRET_BODY]),
+      )
+      assert.ok(message !== null, 'expected a throw, got none')
+      assert.match(message, /gh issue comment failed against Sullux\/pi-agents/)
+      assert.match(message, /Issue not found \(HTTP 422\)/)
+      assert.ok(
+        !message.includes(SECRET_BODY),
+        'the body leaked into a gh-failure message too',
+      )
+      assert.match(
+        message,
+        new RegExp(`--body <${SECRET_BODY.length} chars redacted>`),
+        'the argv must stay countable without being readable',
+      )
     }))
 
   it('a short body is still redacted - the guard is not length-conditional', () =>
@@ -317,12 +331,11 @@ describe('repo resolution and error attribution (#41)', () => {
         },
         cwd: '/x',
       })
-      try {
-        client.runGh(['issue', 'edit', '4', '--body', 'tiny'])
-        assert.fail('expected a throw')
-      } catch (err) {
-        assert.ok(!err.message.includes('--body tiny'), 'short bodies must redact too')
-        assert.match(err.message, /--body <4 chars redacted>/)
-      }
+      const message = captureThrow(() =>
+        client.runGh(['issue', 'edit', '4', '--body', 'tiny']),
+      )
+      assert.ok(message !== null, 'expected a throw, got none')
+      assert.ok(!message.includes('--body tiny'), 'short bodies must redact too')
+      assert.match(message, /--body <4 chars redacted>/)
     }))
 })
