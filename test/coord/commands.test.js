@@ -9,7 +9,10 @@ describe('Coordination Protocol: Service Methods', () => {
       issueKind: async () => ({ isPullRequest: false }),
       // #53: hub() resolves its target from the repo's own issues now, so the double
       // declares one carrying the `hub` label. Fidelity only - assertions untouched.
-      listIssues: async () => [{ number: 4, labels: [{ name: 'hub' }] }],
+      listIssues: async () => [
+        { number: 4, labels: [{ name: 'bug' }] },
+        { number: 11, labels: [{ name: 'hub' }] },
+      ],
       commentIssue: async (num, body) => {
         posted.push({ num, body })
       },
@@ -23,12 +26,48 @@ describe('Coordination Protocol: Service Methods', () => {
 
     await coord.hub('on starting journey tests; nothing blocking')
     assert.equal(posted.length, 1)
-    assert.equal(posted[0].num, 4)
+    assert.equal(
+      posted[0].num,
+      11,
+      '#68: label resolution must beat the decoy #4 (the retired hard default)',
+    )
     assert.ok(posted[0].body.includes('delta | human: @Sullux'))
     assert.ok(
       posted[0].body.includes('starting journey tests; nothing blocking'),
     )
     assert.ok(!posted[0].body.includes('on starting'))
+  })
+
+  it('no hub fixture in this file is numbered 4 - the retired hard default must stay visible (#68)', () => {
+    const source = require('node:fs').readFileSync(__filename, 'utf8')
+    const hubNumbers = [
+      ...source.matchAll(/number:\s*(\d+),\s*labels:\s*\[\{\s*name:\s*'hub'/g),
+    ].map((m) => Number(m[1]))
+    const decoys = [
+      ...source.matchAll(/number:\s*(\d+),\s*labels:\s*\[\{\s*name:\s*'bug'/g),
+    ].map((m) => Number(m[1]))
+    // the formatter-direct fixture is a different shape: `const hubRow = (labels) => ({ number: N,`
+    const hubRowLine = source.match(
+      /const hubRow = \(labels\) => \(\{\n\s*number:\s*(\d+)/,
+    )
+    assert.ok(
+      hubRowLine,
+      'the hubRow fixture moved or changed shape - this ratchet must move with it',
+    )
+    const allHub = [...hubNumbers, Number(hubRowLine[1])]
+    assert.ok(
+      hubNumbers.length >= 8,
+      `expected the 8 hub fixtures to still parse, saw ${hubNumbers.length}`,
+    )
+    assert.ok(
+      !allHub.includes(4),
+      `a hub fixture drifted back to 4, which is also the retired default - this file is blind again: ${allHub}`,
+    )
+    assert.deepEqual([...new Set(allHub)], [11], allHub)
+    assert.ok(
+      decoys.includes(4),
+      'the decoy #4 must be present or the arms prove nothing about precedence',
+    )
   })
 
   // #3: the service guard. An empty body still produced a well-formed 23-byte header
@@ -41,7 +80,10 @@ describe('Coordination Protocol: Service Methods', () => {
         issueKind: async () => ({ isPullRequest: false }),
         // #53: hub() resolves its target from the repo's own issues now, so the double
         // declares one carrying the `hub` label. Fidelity only - assertions untouched.
-        listIssues: async () => [{ number: 4, labels: [{ name: 'hub' }] }],
+        listIssues: async () => [
+          { number: 4, labels: [{ name: 'bug' }] },
+          { number: 11, labels: [{ name: 'hub' }] },
+        ],
         commentIssue: async (num, body) => {
           posted.push({ num, body })
         },
@@ -117,7 +159,10 @@ describe('Coordination Protocol: Service Methods', () => {
         issueKind: async () => ({ isPullRequest: false }),
         // #53: hub() resolves its target from the repo's own issues now, so the double
         // declares one carrying the `hub` label. Fidelity only - assertions untouched.
-        listIssues: async () => [{ number: 4, labels: [{ name: 'hub' }] }],
+        listIssues: async () => [
+          { number: 4, labels: [{ name: 'bug' }] },
+          { number: 11, labels: [{ name: 'hub' }] },
+        ],
         commentIssue: async (num, body) => {
           posted.push({ num, body })
         },
@@ -189,7 +234,10 @@ describe('Coordination Protocol: Service Methods', () => {
       issueKind: async () => ({ isPullRequest: false }),
       // #53: hub() resolves its target from the repo's own issues now, so the double
       // declares one carrying the `hub` label. Fidelity only - assertions untouched.
-      listIssues: async () => [{ number: 4, labels: [{ name: 'hub' }] }],
+      listIssues: async () => [
+        { number: 4, labels: [{ name: 'bug' }] },
+        { number: 11, labels: [{ name: 'hub' }] },
+      ],
       viewIssue: async (num) => ({
         number: num,
         labels: [{ name: 'status:claimed' }, { name: 'p1' }],
@@ -226,7 +274,10 @@ describe('Coordination Protocol: Service Methods', () => {
       issueKind: async () => ({ isPullRequest: false }),
       // #53: hub() resolves its target from the repo's own issues now, so the double
       // declares one carrying the `hub` label. Fidelity only - assertions untouched.
-      listIssues: async () => [{ number: 4, labels: [{ name: 'hub' }] }],
+      listIssues: async () => [
+        { number: 4, labels: [{ name: 'bug' }] },
+        { number: 11, labels: [{ name: 'hub' }] },
+      ],
       viewIssue: async (num) => ({
         number: num,
         labels: [{ name: 'status:in-review' }, { name: 'p1' }],
@@ -296,8 +347,12 @@ describe('Coordination Protocol: label-shape contract (#15)', () => {
     labels,
     comments: [{ body: '**CLAIM** | agent: alpha | at: 2026-10-28T04:00:00Z' }],
   })
+  // #68: this fixture was numbered 4, which is ALSO the hard default #65 removed - so the formatter's
+  // label fallback could not distinguish "resolved by label" from "magic constant". Renumbered, and
+  // `build` below stages a decoy unlabelled #4: a default drifting back now posts to the decoy and
+  // reddens the arm instead of silently passing it.
   const hubRow = (labels) => ({
-    number: 4,
+    number: 11,
     title: 'Coordination hub',
     body: '## Files\nsrc/hub.js',
     labels,
@@ -383,7 +438,20 @@ describe('Coordination Protocol: label-shape contract (#15)', () => {
     const { formatSync } = require('../../src/coord/formatters')
     const build = (labels, humanLabels) =>
       formatSync({
-        issues: [hubRow(labels), status(humanLabels)],
+        // shape-faithful decoy: whatever label vocabulary the arm is testing, the decoy speaks it too
+        issues: [
+          {
+            number: 4,
+            title: 'Decoy',
+            body: '',
+            labels: labels.map((l) =>
+              typeof l === 'string' ? 'bug' : { name: 'bug' },
+            ),
+            comments: [],
+          },
+          hubRow(labels),
+          status(humanLabels),
+        ],
         currentAgent: 'other',
         // #65: `hubNumber` is removed from this contract - a caller that passes no target
         // must still locate the labelled hub, which is exactly what this arm is about.
@@ -406,7 +474,7 @@ describe('Coordination Protocol: label-shape contract (#15)', () => {
       'non-vacuity: the flagged issue is LISTED, not just the header',
     )
     assert.ok(
-      /hub #4 \(the 'hub' label \(formatter fallback\)\)/.test(str),
+      /hub #11 \(the 'hub' label \(formatter fallback\)\)/.test(str),
       'hub located by label under the string shape too',
     )
     assert.equal(obj, str)
@@ -442,7 +510,10 @@ describe('coord hub stamps its own line (#29 guard 2)', () => {
         issueKind: async () => ({ isPullRequest: false }),
         // #53: hub() resolves its target from the repo's own issues now, so the double
         // declares one carrying the `hub` label. Fidelity only - assertions untouched.
-        listIssues: async () => [{ number: 4, labels: [{ name: 'hub' }] }],
+        listIssues: async () => [
+          { number: 4, labels: [{ name: 'bug' }] },
+          { number: 11, labels: [{ name: 'hub' }] },
+        ],
         commentIssue: async (num, body) => posted.push({ num, body }),
       },
       agent: 'delta',
@@ -541,7 +612,10 @@ describe('coord label mutation is best-effort (#34)', () => {
         issueKind: async () => ({ isPullRequest: false }),
         // #53: hub() resolves its target from the repo's own issues now, so the double
         // declares one carrying the `hub` label. Fidelity only - assertions untouched.
-        listIssues: async () => [{ number: 4, labels: [{ name: 'hub' }] }],
+        listIssues: async () => [
+          { number: 4, labels: [{ name: 'bug' }] },
+          { number: 11, labels: [{ name: 'hub' }] },
+        ],
         viewIssue: async () => issue,
         listIssues: async () => [issue],
         commentIssue: async (num, body) => {
@@ -701,7 +775,10 @@ describe('#28 done refuses to close an issue the caller does not hold', () => {
       issueKind: async () => ({ isPullRequest: false }),
       // #53: hub() resolves its target from the repo's own issues now, so the double
       // declares one carrying the `hub` label. Fidelity only - assertions untouched.
-      listIssues: async () => [{ number: 4, labels: [{ name: 'hub' }] }],
+      listIssues: async () => [
+        { number: 4, labels: [{ name: 'bug' }] },
+        { number: 11, labels: [{ name: 'hub' }] },
+      ],
       viewIssue: async () => ({
         number: 700,
         title: '#28 fixture',
