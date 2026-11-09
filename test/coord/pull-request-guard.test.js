@@ -17,21 +17,37 @@ const {
 //
 // These arms fire on the API OBJECT'S SHAPE - the double answers `pull_request` present or absent for
 // the same number - so no list of "numbers that happen to be PRs" can make them pass.
+//
+// #54: that sentence was only true of the POSITIONAL until now. The probe used to ignore the number it
+// was handed and return one fixture-wide flag, which made the flag's own semantics (`--pr` legitimately
+// addresses a pull request, so it must NOT be kind-checked) unfalsifiable: a guard that refused on the
+// flag answered identically to the shipped one, and box 3 stayed green. `prNumbers` below makes the
+// probe per-number, and the fixture floor arm keeps it that way.
 
 const VERBS = ['claim', 'release', 'status', 'review', 'done']
 
 const recorder = ({
   isPullRequest,
+  prNumbers = [],
   body = '',
   title = 'feat: the thing',
 } = {}) => {
   const writes = []
+  // #54: numbers arrive as CLI strings on the `--pr` path and as integers from a programmatic caller,
+  // so the set is normalized on both sides - otherwise a fixture that writes `prNumbers: [47]` and an
+  // arm that calls `review(21, { pr: '47' })` silently disagree and the blindness is back.
+  const prSet = new Set(prNumbers.map(String))
   return {
     writes,
     repo: 'Sullux/pi-agents',
     // #30: the kind probe is the ONLY thing that can see a PR - `gh issue view --json` has no
     // pull_request / isPullRequest field (measured: `Unknown JSON field`), so the service has to ask.
-    issueKind: async (number) => ({ isPullRequest, number, title, body }),
+    issueKind: async (number) => ({
+      isPullRequest: isPullRequest || prSet.has(String(number)),
+      number,
+      title,
+      body,
+    }),
     listIssues: async () => [],
     viewIssue: async () => ({
       number: 21,
@@ -156,13 +172,27 @@ test('box 4: the refusal path writes NOTHING - no comment, no label, no close', 
 })
 
 test('box 3: --pr stays a legitimate pull-request number (the guard checks the positional only)', async () => {
-  const github = recorder({ isPullRequest: false })
+  // #54: 47 resolves AS a pull request in the double now, so this arm can actually see a guard that
+  // kind-checked the flag - before the fixture change it got the same `isPullRequest: false` for 21 and
+  // 47 and passed under any mutation of the positional/flag distinction.
+  const github = recorder({ isPullRequest: false, prNumbers: ['47', 51] })
   const coord = serviceOver(github)
   const res = await coord.review(21, { pr: '47', text: 'verdict on the tree' })
   assert.notEqual(
     res.ok,
     false,
     'review with a real PR number in --pr must still work',
+  )
+  // The integer form, because the probe normalizes: a caller that passes a number instead of a string
+  // is the same legitimate usage, and it is the half that rots first if normalization ever breaks.
+  const resInt = await coord.review(21, {
+    pr: 51,
+    text: 'same verdict, integer flag',
+  })
+  assert.notEqual(
+    resInt.ok,
+    false,
+    'a pull-request number given as an integer is still legal usage',
   )
   assert.ok(
     github.writes.some((w) => w[0] === 'comment' && w[2].includes('pr: #47')),
@@ -301,6 +331,31 @@ test('pullRequestRefusal names the number, the kind, the title, and stays one li
     msg.split('\n').length,
     1,
     'one line, so it cannot be read as a multi-line report',
+  )
+})
+
+test("the recorder's probe answers per-number - the fixture's own non-vacuity floor (#54)", async () => {
+  const github = recorder({ isPullRequest: false, prNumbers: ['47', 51] })
+  assert.equal(
+    (await github.issueKind(21)).isPullRequest,
+    false,
+    'the issue-shaped number stays an issue',
+  )
+  assert.equal(
+    (await github.issueKind('47')).isPullRequest,
+    true,
+    'a listed PR answers as a PR as a string',
+  )
+  assert.equal(
+    (await github.issueKind(51)).isPullRequest,
+    true,
+    'and as an integer - the normalization is the point',
+  )
+  const blind = recorder({ isPullRequest: false })
+  assert.equal(
+    (await blind.issueKind(47)).isPullRequest,
+    false,
+    'with no prNumbers the probe is blind again, which is the state this floor exists to catch',
   )
 })
 
