@@ -385,7 +385,8 @@ describe('Coordination Protocol: label-shape contract (#15)', () => {
       formatSync({
         issues: [hubRow(labels), status(humanLabels)],
         currentAgent: 'other',
-        hubNumber: 99,
+        // #65: `hubNumber` is removed from this contract - a caller that passes no target
+        // must still locate the labelled hub, which is exactly what this arm is about.
         staleMinutes: 45,
         now: Date.parse('2026-10-28T05:00:00Z'),
       })
@@ -405,7 +406,7 @@ describe('Coordination Protocol: label-shape contract (#15)', () => {
       'non-vacuity: the flagged issue is LISTED, not just the header',
     )
     assert.ok(
-      /hub #4,/.test(str),
+      /hub #4 \(the 'hub' label \(formatter fallback\)\)/.test(str),
       'hub located by label under the string shape too',
     )
     assert.equal(obj, str)

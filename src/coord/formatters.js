@@ -1,5 +1,6 @@
 const { ownerOf, cleanAgent, protocolStatus } = require('./owner')
 const { parseScope, labelNames, statusOf } = require('./scope')
+const { isIssueNumber } = require('./issueNumber')
 
 // #15: `labelNames` (scope.js) tolerates BOTH shapes a caller can hand us - gh's object labels
 // (`{ name }`) and a normalized string list - and the gate (`statusOf`) already reads through it.
@@ -125,11 +126,55 @@ const formatBoard = (issues = [], currentAgent = '', repo = '') => {
   return lines.join('\n')
 }
 
+// #65: the hub tail used to resolve as `i.number === hubNumber || hasLabel(i, 'hub')` with a
+// `hubNumber = 4` default that no caller overrode. Two defects in one clause: an open issue numbered
+// 4 could OUTRANK the labelled hub purely on list order (a repo whose hub is #2 with an open #4 read
+// the wrong hub's comments as the fleet tail), and with nothing to match it still printed
+// `== hub #4, last 5 comments ==` over `(none)` - naming an issue that was never in the rows, in a
+// repo that has no hub at all. Resolution now comes from ONE place: the caller passes the target the
+// same resolver `hub()` uses produced; a direct formatter call falls back to the label, deterministically
+// lowest-numbered, never first-in-list.
+const hubNumberFromLabel = (issues) => {
+  const labelled = issues
+    .filter((i) => hasLabel(i, 'hub'))
+    .map((i) => Number(i.number))
+    .filter((n) => isIssueNumber(n))
+    .sort((a, b) => a - b)
+  return labelled.length ? labelled[0] : null
+}
+
+const locateHub = (issues, hub) => {
+  // #67 review ask (Alpha): `undefined` and `null` are DIFFERENT facts and must not share a branch.
+  // Undefined means the caller never resolved anything, so the label fallback below is the only way to
+  // name a hub. Null means the resolver RAN and answered "there is no usable hub" - and re-resolving
+  // there is how the board substituted its own target for one the write path had refused: with
+  // `COORD_HUB=pi/13` (a shape this fleet has actually recorded) and a real labelled #4 in the rows,
+  // `sync` printed `hub #4 (the 'hub' label (formatter fallback))` while `hub()` refused the same
+  // value outright. Honour the refusal; its sentence travels in `hubReason`.
+  if (hub === null) return { number: null, issue: undefined, via: '' }
+  const wanted = hub?.number ? Number(hub.number) : hubNumberFromLabel(issues)
+  if (!isIssueNumber(wanted)) return { number: null, issue: undefined, via: '' }
+  // Naming WHICH path produced the number is the point: `sync` always passes a target, so a tail
+  // reading `formatter fallback` means the two paths diverged - the exact condition #65 is about,
+  // made visible in the output instead of silently agreeing on the same number from two places.
+  return {
+    number: wanted,
+    issue: issues.find((i) => Number(i.number) === wanted),
+    via: hub?.via || "the 'hub' label (formatter fallback)",
+  }
+}
+
 const formatSync = ({
   issues = [],
   currentAgent = '',
   repo = '',
-  hubNumber = 4,
+  // #67 review ask: deliberately NO default on `hub`. `undefined` means "the caller never resolved a
+  // hub" (the label fallback is the legitimate answer); `null` means "the resolver ran and refused
+  // one" (the board must honour that, not re-resolve). A `hub = null` default collapses the two and
+  // turns every direct formatter call into a refusal - the same conflation the locateHub guard
+  // removes, smuggled in one layer up.
+  hub,
+  hubReason = '',
   staleMinutes = 45,
   now = Date.now(),
 } = {}) => {
@@ -178,21 +223,37 @@ const formatSync = ({
   ]
 
   // 4. Hub tail
-  const hubIssue = issues.find(
-    (i) => i.number === hubNumber || hasLabel(i, 'hub'),
-  )
+  //
+  // #65: a repo with no hub used to print `== hub #4, last 5 comments ==` over `(none)` - a phantom
+  // number, naming an issue that was never in the rows read, in a repo that has no hub at all. That
+  // reads exactly like an empty hub and never like a missing one. Resolution now comes from the
+  // caller's `hub` (the same resolver `hub()` posts through); a direct formatter call with no target
+  // falls back to the LABEL, lowest-numbered, so precedence cannot depend on list order again.
+  const located = locateHub(issues, hub)
+  const hubIssue = located.issue
   const hubComments = (hubIssue?.comments || []).slice(-5)
-  const hubLines = [
-    `\n== hub #${hubIssue?.number || hubNumber}, last 5 comments ==`,
-    hubComments.length
-      ? hubComments.map((c) => `  ${c.body}`).join('\n\n')
-      : '  (none)',
-    ...(hubIssue?.commentsTruncated
-      ? [
-          "  !! gh returned only the first 100 comments, so the tail above is the FIRST page's, not the latest - read the hub with `gh issue view` before trusting it",
-        ]
-      : []),
-  ]
+  const hubLines = !isIssueNumber(located.number)
+    ? [
+        // #65 + #53 review ask, composed: the ADVICE lives in `hubReason` - the resolver's own
+        // taxonomy-aware sentence - because a second copy here is how two surfaces start disagreeing.
+        // This line told readers to `label one open issue \`hub\`` in a repo where that exact step is
+        // refused, three commits after the write path stopped saying it.
+        `\n== no hub in ${repo || '(no repo resolved)'} - the hub tail is skipped ==`,
+        ...(hubReason ? [`  ${hubReason}`] : []),
+      ]
+    : [
+        `\n== hub #${located.number} (${located.via}), last 5 comments ==`,
+        hubIssue
+          ? hubComments.length
+            ? hubComments.map((c) => `  ${c.body}`).join('\n\n')
+            : '  (none)'
+          : `  (hub #${located.number} resolved but is not among the ${issues.length} row(s) read - closed, or beyond the list page)`,
+        ...(hubIssue?.commentsTruncated
+          ? [
+              "  !! gh returned only the first 100 comments, so the tail above is the FIRST page's, not the latest - read the timeline with gh api",
+            ]
+          : []),
+      ]
 
   return [
     boardSection,

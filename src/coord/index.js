@@ -433,12 +433,22 @@ const CoordService = ({
   // to carry that number (in pi-agents: the closed #4 ENOBUFS bug report) and printed
   // success naming a DIFFERENT repo. Resolution is now explicit COORD_HUB, else the single
   // open issue carrying the `hub` label, else a refusal that says which.
-  const readHubTarget = async () => {
+  const readHubTarget = async ({ issues } = {}) => {
     const declared = `${process.env.COORD_HUB ?? ''}`.trim()
     // A client that cannot list cannot be verified as having a hub, so the optional call
     // lands on the `no open issue carries the 'hub' label` refusal below rather than a
     // TypeError out of the verb - the safe outcome is still a refusal, never an assumption.
-    const open = (await github.listIssues?.({ state: 'open' })) || []
+    // #65: `sync` already holds the rows it is about to render, so it passes them in - one read
+    // for the board and the hub tail, and both halves are guaranteed to describe the SAME snapshot.
+    // Alpha's review note on #67, worth recording where the next reader will see it: when a caller
+    // injects `issues` this does NOT re-filter by state, so the name `open` is a promise about the
+    // caller, not a guarantee from here. It holds today because `sync` passes rows it read with
+    // `{ state: 'open' }` - the same open-only list the write path resolves against - and a faithful
+    // double reproduces it (a CLOSED hub-labelled row reaches the no-hub branch, which is how the
+    // unfaithful stub that ignored its argument first invented a divergence that did not exist).
+    // A future caller passing an all-states list would get a hub that `hub()` would refuse.
+    const open =
+      issues ?? ((await github.listIssues?.({ state: 'open' })) || [])
     if (declared) {
       const number = Number(declared)
       if (!isIssueNumber(number)) {
@@ -538,10 +548,17 @@ const CoordService = ({
 
   const sync = async () => {
     const issues = await withFullTimelines(await github.listIssues())
+    // #65: the tail used to resolve its own hub independently of `hub()` - a hard `hubNumber = 4`
+    // default that ignored COORD_HUB - so `COORD_HUB=1157 page coord hub "x"` posted to #1157 while
+    // the very next `page coord sync` printed `== hub #4 ==`. One resolver now feeds both paths, over
+    // the rows this call already read.
+    const target = await readHubTarget({ issues })
     return formatSync({
       issues,
       currentAgent: cleanCurrent,
       repo: github.repo,
+      hub: target.number ? { number: target.number, via: target.via } : null,
+      hubReason: target.error || '',
       now: now(),
     })
   }
