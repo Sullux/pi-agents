@@ -1,12 +1,17 @@
 const { execFileSync } = require('node:child_process')
 const { join } = require('node:path')
 
-// #18: in THIS repo the checkout IS the installed program - no build step, no node_modules, and
-// `which page` resolves to `.../pi-agents/bin/page`, so whatever the shared directory holds is
-// what every agent's coord verdict was computed from, and no output ever said so. Measured the day
-// this was written: a sibling's mid-probe marker left a SyntaxError in src/coord/formatters.js and
+// #18: in THIS repo the checkout IS the installed program - no build step, and `which page`
+// resolves to `.../pi-agents/bin/page`, so whatever the shared directory holds is what every
+// agent's coord verdict was computed from, and no output ever said so. Measured the day this was
+// written: a sibling's mid-probe marker left a SyntaxError in src/coord/formatters.js and
 // `page coord board` died in BOTH repos; afterwards the fleet's board ran unmerged code on an
 // unpushed branch while printing `== board ==` as if nothing differed.
+//
+// The one claim above that went stale: "no node_modules". Running `yarn install` here - even with
+// zero dependencies - leaves `node_modules/.yarn-integrity`, and the repo had no `.gitignore` at
+// all, so from the first install onward every agent's coord run reported the shared runtime tree as
+// `dirty`. #74 split the reading into tracked dirt and untracked paths, and added the ignore rule.
 //
 // The visibility half, and it ADVISES rather than enforces: note on STDERR (a warning inside the
 // board's own output would break every agent grepping it), no exit-code change, no refusal - a
@@ -47,6 +52,22 @@ const Provenance = ({ cwd = defaultRoot, git = defaultGit(cwd) } = {}) => {
       .map((ref) => ({ ref, sha: safe(['rev-parse', '--short', ref]) }))
       .find((entry) => entry.sha !== '') ?? { ref: '', sha: '' }
 
+  // #74: `dirty` used to mean "porcelain printed anything at all", which conflated two different
+  // facts. A tracked modification is somebody's uncommitted change to code that IS in the tip; an
+  // untracked path is a file that is in no commit. Only the first one means "this tree is not the
+  // tip I claim to be", and the second one - an untracked `node_modules/` in a repo with no
+  // `.gitignore` - was firing on literally every command, in the one tree every agent executes.
+  // Both still refuse trust below, because `require()` resolves from the working tree: an untracked
+  // src file is live code, so relaxing the wording is not relaxing the gate.
+  const splitDirt = (porcelain) => {
+    const lines = porcelain === '' ? [] : porcelain.split('\n')
+    const untracked = lines
+      .filter((line) => line.startsWith('?? '))
+      .map((line) => line.slice(3).trim())
+      .filter((path) => path !== '')
+    return { tracked: lines.length - untracked.length, untracked }
+  }
+
   const read = () => {
     const sha = safe(['rev-parse', '--short', 'HEAD'])
     const name = safe(['symbolic-ref', '--short', '-q', 'HEAD'])
@@ -55,12 +76,14 @@ const Provenance = ({ cwd = defaultRoot, git = defaultGit(cwd) } = {}) => {
       ? safe(['rev-list', '--left-right', '--count', `${tip.ref}...HEAD`])
       : ''
     const [behind, ahead] = counts.split(/\s+/).map((n) => Number(n) || 0)
+    const dirt = splitDirt(safe(['status', '--porcelain']))
     return {
       cwd,
       sha,
       // no symbolic ref means detached, which is fine when it sits on the tip
       branch: name || 'detached',
-      dirty: safe(['status', '--porcelain']) !== '',
+      dirty: dirt.tracked > 0,
+      untracked: dirt.untracked,
       upstreamSha: tip.sha,
       tipRef: tip.ref,
       ahead: ahead || 0,
@@ -77,13 +100,29 @@ const Provenance = ({ cwd = defaultRoot, git = defaultGit(cwd) } = {}) => {
     state.upstreamSha !== '' &&
     state.sha === state.upstreamSha &&
     !state.dirty &&
+    (state.untracked?.length ?? 0) === 0 &&
     state.ahead === 0 &&
     state.behind === 0
+
+  // the term is the whole point of #74: "dirty" stays reserved for a peer's uncommitted edit to
+  // tracked code, or the warning teaches everyone to ignore it. Untracked paths get named as what
+  // they are, with the paths, so `node_modules/` reads differently from an untracked src file.
+  const dirtTerm = (state) => {
+    const untracked = state.untracked ?? []
+    if (state.dirty)
+      return untracked.length === 0
+        ? 'dirty'
+        : `dirty +${untracked.length} untracked`
+    if (untracked.length === 0) return ''
+    const shown = untracked.slice(0, 3).join(', ')
+    const rest = untracked.length > 3 ? `, +${untracked.length - 3} more` : ''
+    return `untracked only (${untracked.length} path(s): ${shown}${rest})`
+  }
 
   const note = (state = read()) => {
     if (!state.measured || isTrusted(state)) return ''
     const moves = [
-      state.dirty ? 'dirty' : '',
+      dirtTerm(state),
       state.ahead > 0 ? `+${state.ahead}` : '',
       state.behind > 0 ? `-${state.behind}` : '',
     ]
@@ -107,11 +146,19 @@ const Provenance = ({ cwd = defaultRoot, git = defaultGit(cwd) } = {}) => {
   const describe = (state = read()) => {
     const trust = isTrusted(state) ? 'merged tip' : 'NOT the merged tip'
     const known = (field, value) => (state.measured ? value : field)
+    const untracked = state.untracked ?? []
+    const worktree = state.dirty
+      ? untracked.length === 0
+        ? 'dirty'
+        : `dirty (+${untracked.length} untracked)`
+      : untracked.length === 0
+        ? 'clean'
+        : `untracked: ${untracked.length}`
     return [
       `path       ${state.cwd}`,
       `sha        ${known('unknown', state.sha)}`,
       `branch     ${known('unknown', state.branch)}`,
-      `worktree   ${known('unknown', state.dirty ? 'dirty' : 'clean')}`,
+      `worktree   ${known('unknown', worktree)}`,
       `upstream   ${state.upstreamSha ? `${state.upstreamSha} (via ${state.tipRef})` : 'none'}`,
       `drift      ${state.upstreamSha ? `${state.ahead} ahead / ${state.behind} behind` : 'unknown'}`,
       `trust      ${trust}`,

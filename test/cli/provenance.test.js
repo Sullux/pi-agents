@@ -5,12 +5,14 @@ const { join } = require('node:path')
 const { Provenance } = require('../../src/cli/selfcheck')
 const { Cli } = require('../../src/cli')
 
-// #18: this repo has no build step and no node_modules, so the shared checkout IS the program every
-// agent runs, and a sibling's branch or mid-probe edit silently becomes everyone's coord. The reading
-// is what was missing. These pins hold three properties at once: the note fires for every way a tree
-// can diverge, it NEVER fires on a clean tree at the tip (otherwise agents learn to ignore it), and it
-// can neither pollute stdout nor change an exit code nor take down the command it is reporting on -
-// which is precisely the outage shape this issue was filed from.
+// #18: this repo has no build step, and `which page` resolves straight into the shared checkout, so
+// the tree IS the program every agent runs - a sibling's branch or mid-probe edit silently becomes
+// everyone's coord. The reading is what was missing. These pins hold three properties at once: the
+// note fires for every way a tree can diverge, it NEVER fires on a clean tree at the tip (otherwise
+// agents learn to ignore it), and it can neither pollute stdout nor change an exit code nor take
+// down the command it is reporting on - which is precisely the outage shape this issue was filed
+// from. #74 later corrected the header's "no node_modules" claim: running yarn here leaves
+// node_modules/.yarn-integrity, and the repo had no .gitignore, so the tree read dirty forever.
 
 // key is the exact argv the module reads, so a rename on either side goes red instead of silently
 // falling through to ''
@@ -196,8 +198,86 @@ describe('Provenance read (#18)', () => {
   })
 })
 
-const fakeCoord = { board: async () => 'BOARD-OUTPUT' }
+// #74: the fleet's shared runtime tree read `dirty` forever, because `dirty` meant "porcelain said
+// anything" and an untracked node_modules/ is what `yarn install` leaves in a repo with no
+// .gitignore. These arms hold the split - and the part that matters most is that the GATE did not
+// move: untracked-only is still untrusted, because require() resolves from the working tree, so an
+// untracked src file is live code. Only the wording got honest.
+describe('tracked dirt vs untracked paths (#74)', () => {
+  it('names an untracked-only tree as untracked, never as dirty, and still refuses trust', () => {
+    // BASE is already at the upstream tip, so the ONLY thing that can untrust this tree is the
+    // untracked path - if the gate had been relaxed, trusted would flip true and this arm would fail
+    const p = at({ 'status --porcelain': '?? node_modules/' })
+    const state = p.read()
+    assert.equal(state.dirty, false, 'an untracked path was still called dirty')
+    assert.deepEqual(state.untracked, ['node_modules/'])
+    assert.equal(
+      p.isTrusted(),
+      false,
+      'the gate moved: untracked-only must stay untrusted',
+    )
+    assert.match(p.note(), /untracked only \(1 path\(s\): node_modules\/\)/)
+    assert.doesNotMatch(p.note(), /dirty/, `note still said dirty: ${p.note()}`)
+    assert.match(p.describe(), /^worktree   untracked: 1$/m)
+  })
 
+  it('keeps calling a tracked edit dirty, and reports untracked paths riding along', () => {
+    const p = at({
+      'status --porcelain': ' M src/coord/index.js\n?? node_modules/',
+    })
+    const state = p.read()
+    assert.equal(state.dirty, true, 'a tracked edit stopped being dirty')
+    assert.deepEqual(state.untracked, ['node_modules/'])
+    assert.match(p.note(), /dirty \+1 untracked/)
+    assert.doesNotMatch(p.note(), /untracked only/)
+    assert.match(p.describe(), /^worktree   dirty \(\+1 untracked\)$/m)
+  })
+
+  it('still calls a tracked-only tree plain dirty - the old wording is unchanged', () => {
+    const p = at({ 'status --porcelain': ' M src/x.js' })
+    assert.equal(p.read().dirty, true)
+    assert.deepEqual(p.read().untracked, [])
+    assert.match(p.note(), /dirty/)
+    assert.doesNotMatch(p.note(), /untracked/)
+    assert.match(p.describe(), /^worktree   dirty$/m)
+  })
+
+  it('previews three paths and counts the rest, in one line, so a big list cannot bury the note', () => {
+    const p = at({
+      'status --porcelain': [
+        '?? a/',
+        '?? b.js',
+        '?? c.js',
+        '?? d.js',
+        '?? e.js',
+      ].join('\n'),
+    })
+    const note = p.note()
+    assert.equal(p.read().untracked.length, 5)
+    assert.match(
+      note,
+      /untracked only \(5 path\(s\): a\/, b.js, c.js, \+2 more\)/,
+    )
+    assert.doesNotMatch(note, /\n/, 'the note grew past one line')
+    assert.ok(!note.includes('e.js'), 'the preview leaked past its cap')
+  })
+
+  it('splits the dirt without adding a git read - the seam list is the whole claim', () => {
+    const git = readings({ ...BASE, 'status --porcelain': '?? node_modules/' })
+    Provenance({ cwd: '/fake/repo', git }).read()
+    // the split is derived from the SAME porcelain answer; a second `status` call would double every
+    // spawn in a module whose header promises each reading is individually survivable
+    assert.deepEqual(git.calls, [
+      'rev-parse --short HEAD',
+      'symbolic-ref --short -q HEAD',
+      'rev-parse --short @{u}',
+      'rev-list --left-right --count @{u}...HEAD',
+      'status --porcelain',
+    ])
+  })
+})
+
+const fakeCoord = { board: async () => 'BOARD-OUTPUT' }
 const harness = (provenance) => {
   const out = []
   const err = []

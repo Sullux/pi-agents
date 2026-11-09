@@ -22,6 +22,14 @@ const SPLIT_LINE = /^(\^)?split:/i
 // `-->` on the following line when an author opens `<!--` and closes it later, and that token
 // starts with none of the prefixes the filter knows, so it would be compared as a declared path.
 const COMMENT_FRAGMENT = /^(<!--|-->)/
+// #81: a block-quoted line inside the Files section is documentation, not a declaration - it has the
+// same status as a path inside a fenced example (#816) - but `>` was in none of the prefixes this
+// filter knew, so an author's intent note became a scope ENTRY. Measured live on pitcairn #1182:
+// its Files section returned 2 entries where exactly one is a path, the other being
+// `> Box 1 stays unticked on purpose: ...`, and `page coord board` printed that sentence in the
+// FILES column as if it were a file. The rule is a LINE PREFIX, not a character rule: a `>` inside
+// a path is that path's business, and `> src/a.js` is a quoted path, which is a note about a path.
+const BLOCKQUOTE = /^>/
 // #26: a setext underline is heading punctuation, never a path. Measured before the fix: a body
 // with an ATX `## Files` followed by a setext `Notes` + `----` returned
 // ["src/a.js", "Notes", "-----", "y"] - three junk paths from three prose lines, and a `-----`
@@ -34,6 +42,7 @@ const NOT_A_PATH = (path) =>
   path.startsWith('_(') ||
   path.startsWith('#') ||
   UNDERLINE_TOKEN.test(path) ||
+  BLOCKQUOTE.test(path) ||
   SPLIT_LINE.test(path) ||
   COMMENT_FRAGMENT.test(path)
 
@@ -180,6 +189,26 @@ const statusOf = (issue) =>
 // and still refuse.
 const SOFT_STATUSES = ['in-review']
 
+// #76: the `!owner` half of the old skip made an UNCLAIMED issue invisible to the gate, so two
+// agents could claim the same concrete path in the same minute and neither was warned - the
+// pitcairn pair #1171 / #1179 (both open, both declaring test/style-debt.mjs, both unclaimed) is
+// the live witness. An unclaimed overlap is a warning and never a refusal: nobody has committed
+// to it yet, and fencing on a declaration would freeze the very work the board calls free.
+//
+// #77 review: making an unheld overlap VISIBLE also made the advice text wrong, because
+// both renderers hardcoded "rebase owed after it merges" - true for an `in-review` overlap whose
+// merge is already pending, false for an unclaimed one that may never merge. The gate went from
+// saying nothing to saying something untrue, which is the worse of the two. So the advice travels
+// ON the warning, computed once where the collision is classified, and each renderer keeps only
+// its own presentation (the CLAIM comment uses a `- ` bullet, the CLI an indented `!` line). An
+// exported builder would still have left the two call sites free to disagree.
+const UNHELD_AGENT = 'nobody'
+
+const warningAdvice = (warning) =>
+  warning.unheld
+    ? 'no claim yet: coordinate before both edit, or claim it first if you mean to own it'
+    : `rebase owed after it merges (status:${warning.status})`
+
 const checkScopeCollision = (
   targetFiles = [],
   activeIssues = [],
@@ -191,8 +220,13 @@ const checkScopeCollision = (
 
   const overlaps = []
   for (const issue of activeIssues) {
+    // Never collide with the issue being claimed: callers that pass the full open set would
+    // otherwise make every unclaimed claim warn about itself now that unheld issues are visible.
+    if (issue.number === target.number) continue
+
     const owner = ownerOf(issue)
-    if (!owner || owner === cleanCurrent) continue
+    if (owner && owner === cleanCurrent) continue
+    const unheld = !owner
 
     const issueFiles = parseScope(issue.body)
     const collidingFiles = targetFiles.filter((f) => issueFiles.includes(f))
@@ -206,10 +240,12 @@ const checkScopeCollision = (
 
     overlaps.push({
       issue: issue.number,
-      agent: owner,
+      agent: owner || UNHELD_AGENT,
       status: statusOf(issue),
       files: collidingFiles,
-      soft: SOFT_STATUSES.includes(statusOf(issue)),
+      unheld,
+      advice: warningAdvice({ unheld, status: statusOf(issue) }),
+      soft: unheld || SOFT_STATUSES.includes(statusOf(issue)),
     })
   }
 

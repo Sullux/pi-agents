@@ -545,11 +545,13 @@ const Cli = ({
         }
         stdout(`Claimed #${num.value} @${target}`)
         reportLabels(res)
-        // #863: an in-review overlap warns rather than fences. Printing it here is what makes the
-        // warning real - the claim still succeeded, so the agent needs to be told a rebase is owed.
+        // #863: an overlap warns rather than fences. Printing it here is what makes the warning
+        // real - the claim still succeeded, so the agent needs to be told what it owes. #76: the
+        // clause now comes from the gate, because "rebase after it merges" was untrue for a
+        // neighbour that carries no claim.
         for (const w of res.warnings || []) {
           stdout(
-            `  ! overlaps #${w.issue} (${w.status}, held by ${w.agent}) on ${w.files.join(', ')} - rebase after it merges`,
+            `  ! overlaps #${w.issue} (${w.status}, ${w.agent}) on ${w.files.join(', ')} - ${w.advice}`,
           )
         }
         return 0
