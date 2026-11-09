@@ -440,6 +440,13 @@ const CoordService = ({
     // TypeError out of the verb - the safe outcome is still a refusal, never an assumption.
     // #65: `sync` already holds the rows it is about to render, so it passes them in - one read
     // for the board and the hub tail, and both halves are guaranteed to describe the SAME snapshot.
+    // Alpha's review note on #67, worth recording where the next reader will see it: when a caller
+    // injects `issues` this does NOT re-filter by state, so the name `open` is a promise about the
+    // caller, not a guarantee from here. It holds today because `sync` passes rows it read with
+    // `{ state: 'open' }` - the same open-only list the write path resolves against - and a faithful
+    // double reproduces it (a CLOSED hub-labelled row reaches the no-hub branch, which is how the
+    // unfaithful stub that ignored its argument first invented a divergence that did not exist).
+    // A future caller passing an all-states list would get a hub that `hub()` would refuse.
     const open =
       issues ?? ((await github.listIssues?.({ state: 'open' })) || [])
     if (declared) {
