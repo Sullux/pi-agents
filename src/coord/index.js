@@ -226,14 +226,18 @@ const CoordService = ({
       }
     }
 
-    // #863: an in-review overlap warns instead of fencing, but a warning nobody sees is not a
-    // warning - it goes to stdout AND into the CLAIM comment, so a teammate reading the timeline
-    // knows this branch owes a rebase.
+    // #863: an overlap warns instead of fencing, but a warning nobody sees is not a warning - it
+    // goes to stdout AND into the CLAIM comment, so a teammate reading the timeline knows what the
+    // branch owes. #76: the header used to assert "in-review work, rebase owed", which is false for
+    // an unclaimed neighbour, so each bullet now carries its own advice from the gate itself.
     const warnings = collision.warnings || []
     const warningNote = warnings.length
-      ? '\n\nscope: overlaps in-review work, rebase owed after it merges\n' +
+      ? '\n\nscope: overlapping open work\n' +
         warnings
-          .map((w) => `- #${w.issue} (${w.agent}) on ${w.files.join(', ')}`)
+          .map(
+            (w) =>
+              `- #${w.issue} (${w.agent}) on ${w.files.join(', ')} - ${w.advice}`,
+          )
           .join('\n')
       : ''
 
