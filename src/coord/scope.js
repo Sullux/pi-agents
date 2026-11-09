@@ -166,7 +166,21 @@ const statusOf = (issue) =>
 // this way on 2026-10-26, and #820 still frozen on 2026-10-27. The remedy for a second author is
 // a rebase after the merge, so it warns. `claimed`, `in-progress` and `blocked` are live edits
 // and still refuse.
+// #863: `in-review` means the work is FINISHED and awaiting a human or a teammate, so fencing
+// files against it blocks new work with completed work - measured 4 of 5 unclaimed issues frozen
+// this way on 2026-10-26, and #820 still frozen on 2026-10-27. The remedy for a second author is
+// a rebase after the merge, so it warns. `claimed`, `in-progress` and `blocked` are live edits
+// and still refuse.
 const SOFT_STATUSES = ['in-review']
+
+// #76: the `!owner` half of the old skip made an UNCLAIMED issue invisible to the gate, so two
+// agents could claim the same concrete path in the same minute and neither was warned - the
+// pitcairn pair #1171 / #1179 (both open, both declaring test/style-debt.mjs, both unclaimed) is
+// the live witness. An unclaimed overlap is a warning and never a refusal: nobody has committed
+// to it yet, and fencing on a declaration would freeze the very work the board calls free. The
+// phrasing the renderers use is tracked separately, because `src/coord/index.js` is held by PR
+// #72 - this file only has to make the overlap RETURN.
+const UNHELD_AGENT = 'nobody'
 
 const checkScopeCollision = (
   targetFiles = [],
@@ -179,8 +193,13 @@ const checkScopeCollision = (
 
   const overlaps = []
   for (const issue of activeIssues) {
+    // Never collide with the issue being claimed: callers that pass the full open set would
+    // otherwise make every unclaimed claim warn about itself now that unheld issues are visible.
+    if (issue.number === target.number) continue
+
     const owner = ownerOf(issue)
-    if (!owner || owner === cleanCurrent) continue
+    if (owner && owner === cleanCurrent) continue
+    const unheld = !owner
 
     const issueFiles = parseScope(issue.body)
     const collidingFiles = targetFiles.filter((f) => issueFiles.includes(f))
@@ -194,10 +213,11 @@ const checkScopeCollision = (
 
     overlaps.push({
       issue: issue.number,
-      agent: owner,
+      agent: owner || UNHELD_AGENT,
       status: statusOf(issue),
       files: collidingFiles,
-      soft: SOFT_STATUSES.includes(statusOf(issue)),
+      unheld,
+      soft: unheld || SOFT_STATUSES.includes(statusOf(issue)),
     })
   }
 
