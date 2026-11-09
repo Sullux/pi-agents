@@ -20,6 +20,7 @@ describe('CoordService', () => {
       listIssues: async () => [mockIssue],
       commentIssue: async (num, body) => {
         commentsPosted.push({ num, body })
+        mockIssue.comments.push({ body }) // #52: a POST must be visible to the next read
       },
       editIssue: async (num, edits) => {
         labelsEdited.push({ num, edits })
@@ -114,7 +115,10 @@ describe('CoordService', () => {
       issueKind: async () => ({ isPullRequest: false }),
       viewIssue: async () => target,
       listIssues: async () => [inReview, target],
-      commentIssue: async (num, body) => posted.push({ num, body }),
+      commentIssue: async (num, body) => {
+        posted.push({ num, body })
+        target.comments.push({ body }) // #52: a POST must be visible to the next read
+      },
       editIssue: async () => {},
     }
 
@@ -183,7 +187,9 @@ describe('CoordService', () => {
       issueKind: async () => ({ isPullRequest: false }),
       viewIssue: async () => target,
       listIssues: async () => [inProgress, target],
-      commentIssue: async () => {},
+      commentIssue: async (num, body) => {
+        target.comments.push({ body }) // #52: a POST must be visible to the next read
+      },
       editIssue: async () => {},
     }
 
