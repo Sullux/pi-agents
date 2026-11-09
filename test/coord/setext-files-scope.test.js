@@ -241,6 +241,12 @@ describe('#26 filesSectionDiagnosis names the real reason (box 5)', () => {
 describe('#26 the claim path reports the reason, not just the refusal', () => {
   const serviceWith = (body) => {
     const calls = []
+    // #52: the timeline has to be STATEFUL. This double returned a fresh object with `comments: []`
+    // on every read, so the CLAIM that commentIssue had just accepted was invisible to the refresh
+    // claim() does on itself - exactly the "written but not visible" state the self-check exists to
+    // refuse. Only the double's fidelity changes; the assertions below are untouched. `bodyText`
+    // because `body` is this closure's own fixture argument.
+    const timeline = []
     const coord = CoordService({
       github: {
         issueKind: async () => ({ isPullRequest: false }),
@@ -249,10 +255,13 @@ describe('#26 the claim path reports the reason, not just the refusal', () => {
           title: '#26 fixture',
           body,
           labels: [],
-          comments: [],
+          comments: timeline,
         }),
         listIssues: async () => [],
-        commentIssue: async () => calls.push('comment'),
+        commentIssue: async (num, bodyText) => {
+          calls.push('comment')
+          timeline.push({ body: bodyText })
+        },
         editIssue: async () => calls.push('edit'),
         closeIssue: async () => calls.push('close'),
       },
