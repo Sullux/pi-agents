@@ -804,3 +804,96 @@ describe('Runner: unattested-closure scan (#99)', () => {
     )
   })
 })
+
+// #139: the queue's verdict signal is comment-form ONLY, because `listPrs` selects
+// `number,title,labels,headRefName,headRefOid,state,comments,closingIssuesReferences` - production
+// never receives a `reviews` field. These arms drive the REAL preflight over a payload in exactly
+// that shape (no `reviews` key at all), so a pin cannot pass by consuming a field that does not ship.
+// The box's `REQUEST CHANGES` wording is NOT a marker at this tip - `BLOCK` is the request-changes
+// synonym the list carries (see VERDICT_MARKERS); pinning the shipped vocabulary, not the ask prose.
+describe('#139: comment-form verdicts are the whole signal (no reviews field exists in the payload)', () => {
+  const HEAD = 'abc1234567890'
+  const issues = [
+    {
+      number: 20,
+      labels: [{ name: 'status:claimed' }],
+      comments: [{ body: '**CLAIM** | agent: bravo' }],
+    },
+  ]
+  const prWith = (comments) => ({
+    number: 100,
+    title: 't',
+    labels: [],
+    headRefName: 'feat/x',
+    headRefOid: HEAD,
+    state: 'OPEN',
+    comments,
+  })
+
+  it('an APPROVE comment with a current head token clears the ask - through checkBacklogAvailability', async () => {
+    const github = {
+      listIssues: async () => issues,
+      listPrs: async () => [
+        prWith([
+          {
+            body:
+              '**APPROVE** | agent: agent-alpha | head `' +
+              HEAD.slice(0, 7) +
+              '`',
+          },
+        ]),
+      ],
+    }
+    const res = await checkBacklogAvailability({ github, agent: 'alpha' })
+    assert.equal(res.status, 'idle_busy')
+    assert.notEqual(
+      res.reason,
+      'open_prs',
+      'the ask must be gone, not merely quieter',
+    )
+  })
+
+  it('BLOCK - the shipped request-changes marker - is equally a verdict', async () => {
+    const github = {
+      listIssues: async () => issues,
+      listPrs: async () => [
+        prWith([
+          {
+            body:
+              '**BLOCK** | agent: agent-alpha | head `' +
+              HEAD.slice(0, 7) +
+              '` - two boxes unticked',
+          },
+        ]),
+      ],
+    }
+    const res = await checkBacklogAvailability({ github, agent: 'alpha' })
+    assert.equal(res.status, 'idle_busy')
+  })
+
+  it("control arm: with no verdict in any form the ask FIRES, and the rendered string is the pinned 'no verdict on this thread yet'", async () => {
+    const github = {
+      listIssues: async () => issues,
+      listPrs: async () => [
+        prWith([{ body: 'just discussion, no protocol header' }]),
+      ],
+    }
+    const res = await checkBacklogAvailability({ github, agent: 'alpha' })
+    assert.equal(res.reason, 'open_prs')
+    assert.equal(res.reviewGaps[0].gap, 'unreviewed')
+    assert.equal(
+      res.reviewGaps[0].hint,
+      'no verdict on this thread yet',
+      'the OPERATOR-VISIBLE string is pinned, not the payload shape - prose written about an old signal goes false when the signal widens',
+    )
+  })
+
+  it('a verdict comment WITHOUT a head token reads unsigned-verdict, not unreviewed - the two asks are different and the hint says which', async () => {
+    const gap = prReviewGap(
+      prWith([{ body: '**APPROVE** | agent: agent-alpha' }]),
+      'alpha',
+    )
+    assert.equal(gap.gap, 'unsigned-verdict')
+    assert.match(gap.hint, /no head token/)
+  })
+})
