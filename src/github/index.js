@@ -229,15 +229,21 @@ const GitHubClient = ({
     // with its remedy. Below the cap the set is complete and says nothing - tagging every call would
     // cry wolf the way the `withFullTimelines` header warns about for the comment axis.
     if (parsed.length === limit) {
+      // #111: the remedies and the collision maxim are OPEN-axis advice. A closure sweep has no collision set,
+      // and #107's own rationale is that a bigger constant is "the same cliff with a longer runway" - so the
+      // closed arm offers only the bound that works there and states the stakes of a sweep, not of a claim gate.
+      const repoName = activeRepo || 'the resolved repo'
+      const lead = `coord: gh issue list returned exactly ${limit} issues on the ${state} axis for ${repoName}, `
       throw new Error(
-        `coord: gh issue list returned exactly ${limit} issues on the ${state} axis for ` +
-          `${activeRepo || 'the resolved repo'}, ` +
-          (state === 'open'
-            ? 'so the OPEN set is TRUNCATED and the tail is invisible to the scope gate - raise '
-            : 'so the CLOSED set is TRUNCATED and this read cannot be swept at all - bound it ' +
-              'server-side (pass options.search, e.g. closed:>=<UTC date>) or raise ') +
-          `ISSUE_PAGE_CEILING (currently ${ISSUE_PAGE_CEILING})` +
-          ' or pass a larger options.limit. A missed collision is worse than a refused claim.',
+        state === 'open'
+          ? lead +
+              'so the OPEN set is TRUNCATED and the tail is invisible to the scope gate - raise ' +
+              `ISSUE_PAGE_CEILING (currently ${ISSUE_PAGE_CEILING}) or pass a larger options.limit. ` +
+              'A missed collision is worse than a refused claim.'
+          : lead +
+              'so the CLOSED set is TRUNCATED and this read cannot be swept at all - bound it ' +
+              'server-side (pass options.search, e.g. closed:>=<UTC date>). An unreadable sweep reads ' +
+              'as UNKNOWN, which is honest; a confident zero off a truncated page is not.',
       )
     }
     return parsed

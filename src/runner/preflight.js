@@ -292,11 +292,15 @@ const checkBacklogAvailability = async ({
     }
   }
 
-  // one extra read per dispatch cycle. It is NOT a bounded read: CLOSE_SCAN_LIMIT is null, so the fetch
-  // inherits listIssues' own ceiling and pulls the whole closed page. What makes the report actionable is the
-  // WINDOW filter applied after the fetch - a hours-wide window is the population, and an unbounded report
-  // would name the fleet's childhood. Runs before the branch checks below, so every state except the
-  // early-returned `idle_empty` has already paid for it.
+  // one extra read per dispatch cycle. It IS bounded, but not by limit: CLOSE_SCAN_LIMIT is null, so the fetch
+  // still inherits listIssues' own ceiling, and what makes the read small enough to be complete is the
+  // `closed:>=<UTC day>` predicate #110 always passes with it - the reason a repo whose whole closed set sits
+  // above that ceiling can be swept at all instead of reporting UNKNOWN. What makes the report actionable is
+  // still the WINDOW filter applied after the fetch, because the predicate is floored to a UTC day and is
+  // therefore a superset, and an exact-hours report is the population; an unbounded report would name the
+  // fleet's childhood. Runs before the branch checks below, so every state except the early-returned
+  // `idle_empty` has already paid for it. The rows-at-cap refusal is kept on purpose: a day that closes at
+  // least the ceiling is UNKNOWN, not clean, and UNKNOWN is the honest answer.
   const closures = await scanUnattestedClosures({ github, now })
 
   const allMyIssues = nonHubIssues.filter((i) => isMine(i, agent))

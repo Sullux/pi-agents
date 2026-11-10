@@ -211,8 +211,26 @@ it('the at-cap refusal names the axis it was asked for, not the one the gate car
       'axis for a repo with four open issues',
   )
 
+  // #111: the two remedies and the collision maxim must NOT ride the closed arm, or the refusal tells the next
+  // operator to do the thing #107's rationale rejects - a bigger constant is the same cliff, longer.
+  for (const phrase of [
+    'larger options.limit',
+    'ISSUE_PAGE_CEILING',
+    'missed collision',
+  ]) {
+    assert.ok(
+      !closed.error.message.includes(phrase),
+      `the closed-axis refusal still offers open-axis advice (${phrase}): ${closed.error.message}`,
+    )
+  }
+
   const open = await call(rows(3), { state: 'open', limit: 3 })
   assert.match(open.error.message, /on the open axis/)
   assert.match(open.error.message, /OPEN set is TRUNCATED/)
   assert.match(open.error.message, /scope gate/)
+  // the open arm keeps every remedy, so the negative block above cannot be satisfied by deleting advice
+  // from both branches - that would be a green on a message that no longer tells anyone what to do.
+  assert.match(open.error.message, /ISSUE_PAGE_CEILING/)
+  assert.match(open.error.message, /larger options\.limit/)
+  assert.match(open.error.message, /missed collision/)
 })
