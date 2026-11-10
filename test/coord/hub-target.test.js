@@ -12,6 +12,7 @@ const { CoordService } = require('../../src/coord')
 const world = ({
   issues = [],
   kind = { isPullRequest: false },
+  kindThrows = null,
   repo = 'Sullux/pi-agents',
   listable = true,
   taxonomy = ['bug', 'hub'],
@@ -23,7 +24,14 @@ const world = ({
   const labelReads = []
   const github = {
     repo,
-    issueKind: async () => kind,
+    // #118 ask 3 (foxtrot's review): the hub path has to separate "the read FAILED" from "the object
+    // is open but not on this list", and a constant return cannot make that pair. The fake still
+    // answers whatever number it is asked for, unchanged - an unfaithful stub that ignored its
+    // argument invented a divergence that did not exist earlier in this file's own history.
+    issueKind: async () => {
+      if (kindThrows) throw kindThrows
+      return kind
+    },
     commentIssue: async (num, body) => posted.push({ num, body }),
   }
   // #53 review ask: the refusal has to know the repo's taxonomy to advise an exit that works, so
@@ -139,6 +147,58 @@ test('COORD_HUB pointing at a closed issue is refused (it is not in the open lis
   const res = await withHub('4', () => w.coord.hub('into a closed thread'))
   assert.equal(res.ok, false)
   assert.match(res.error, /#4 is not an open issue here/)
+  assert.equal(w.posted.length, 0)
+})
+
+// #118 ask 3: `readHubTarget` shares the guard with the five verbs but had no arms of its own, so the
+// half of the issue that lives in the hub path was unpinned while every verb's half was. The pair IS
+// the measurement: neuter the catch and arm one reddens while arm two - which must keep accusing a
+// healthy-but-unlisted issue - stays green. Both were driven with the SAME unlisted number, so nothing
+// about the list can explain the difference in wording.
+test('#118: a hub target whose kind read THROWS says FAILED, quotes the cause, and posts nothing', async () => {
+  const boom = Object.assign(new Error('gh: HTTP 502'), {
+    coordIssueKindReadFailure: true,
+    number: 9999,
+  })
+  const w = world({ issues: [plain(7)], kindThrows: boom })
+  const res = await withHub('9999', () => w.coord.hub('during a gh blip'))
+  assert.equal(res.ok, false)
+  assert.match(
+    res.error,
+    /COORD_HUB=9999 cannot receive a hub line: the kind\/state read for #9999 FAILED/,
+    `a dropped read must not be reported as an absent issue, got: ${res.error}`,
+  )
+  assert.match(
+    res.error,
+    /HTTP 502/,
+    'the transport error is quoted, so the operator retries rather than re-targets',
+  )
+  assert.match(res.error, /Nothing was written/)
+  assert.doesNotMatch(
+    res.error,
+    /not an open issue here/,
+    "and it must not inherit the healthy branch's accusation",
+  )
+  assert.equal(w.posted.length, 0, 'a failed read is a write-side refusal')
+})
+
+test('#118 control: the SAME unlisted number with a readable OPEN answer keeps the old wording', async () => {
+  const w = world({
+    issues: [plain(7)],
+    kind: { isPullRequest: false, state: 'OPEN' },
+  })
+  const res = await withHub('9999', () => w.coord.hub('a real miss'))
+  assert.equal(res.ok, false)
+  assert.match(
+    res.error,
+    /#9999 is not an open issue here/,
+    'the unlisted-and-readable branch is still reachable; the new refusal did not swallow it',
+  )
+  assert.doesNotMatch(
+    res.error,
+    /FAILED/,
+    'a read that answered is not a read that failed',
+  )
   assert.equal(w.posted.length, 0)
 })
 

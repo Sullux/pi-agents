@@ -210,9 +210,16 @@ const GitHubClient = ({
   // an issue-shaped problem" on a CLOSED target, which is how foxtrot's REVIEW (6759789295) and STATUS
   // (6759802769) are sitting on closed pi#94 right now with rc 0. Normalized here rather than at the
   // compare, because this method is the thing that mis-stated its own contract; every consumer then
-  // inherits a working check. `undefined` on a failed read is deliberately UNCHANGED - that is #118's
-  // fail-open half, which needs `src/coord/index.js` (alpha's #124 is editing it now) plus delta's
-  // #121 fixture re-pin, and making this throw would redden doubles that legitimately omit `state`.
+  // inherits a working check.
+  //
+  // SUPERSEDED for the failed-read half by #118, which landed in this same file: the sentence below
+  // used to read "`undefined` on a failed read is deliberately UNCHANGED", and it is the plan this
+  // branch executed instead of honored - a failed read now THROWS (module-level `kindReadFailure`,
+  // defined above the client factory), and the 31 doubles that "would redden" were re-pinned onto
+  // `state: 'OPEN'` rather than
+  // left relying on the silence. Kept as history because the casing rule above is still live and a
+  // reader needs to know why the two blocks in this function disagree about `undefined`: widening a
+  // signal falsifies the prose written about the old signal, so the correction travels with it.
   const upper = (value) =>
     typeof value === 'string' ? value.toUpperCase() : value
 

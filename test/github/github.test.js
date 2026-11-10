@@ -295,6 +295,40 @@ describe('#126 kind casing and the per-issue timeline read', () => {
     }
   })
 
+  it('#118 ask 2 (review): a read that SUCCEEDS with no `state` still resolves - the third case, driven', async () => {
+    // The PR's whole claim is that "the read failed" and "the object carries no state" are different
+    // facts, and the first two had arms while the third - the one that keeps `upper()`'s normalization
+    // honest - had none on the real client. A double that throws proves only that CoordService
+    // propagates; this drives the actual exec seam with a payload that is readable and stateless.
+    // Discrimination: make `state: undefined` a throw and THIS arm reddens while the two above stay
+    // green, which is the selectivity that makes the pair of throw arms mean something.
+    const client = GitHubClient({
+      repo: 'Sullux/pi-agents',
+      execFile: () =>
+        '{"isPullRequest":false,"state_reason":null,"title":"t","body":"b"}',
+    })
+    const kind = await client.issueKind(94)
+    assert.ok(
+      kind && !kind.isPullRequest,
+      'a readable object answers, it does not reject',
+    )
+    assert.equal(
+      kind.state,
+      undefined,
+      'a payload with no `state` key answers `state: undefined` - readable, not failed',
+    )
+    assert.equal(
+      kind.stateReason,
+      undefined,
+      '`upper()` passes a missing field through instead of inventing one',
+    )
+    assert.equal(
+      isKindReadFailure(kind),
+      false,
+      'and the guard cannot mistake it for a read that failed',
+    )
+  })
+
   it('issueTimeline is exported, paginates inside one issue, and flattens', async () => {
     const seen = []
     const client = GitHubClient({
