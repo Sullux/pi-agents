@@ -24,12 +24,17 @@ const resolveCyclePrompt = ({
   isNewTask = false,
   steering = '',
   reviewGaps = [],
+  closures = null,
 } = {}) => {
   const base = isNewTask
     ? 'Proceed with development using the coordinate skill (finish any in-progress work, or check the board and PRs if ready for a new task).'
     : 'Continue development using the coordinate skill.'
   const hint = describeReviewGaps(reviewGaps)
-  const withHint = hint ? `${base}\n${hint}` : base
+  let withHint = hint ? `${base}\n${hint}` : base
+  // #99: the closure report is preflight's, not this file's - render what the scan measured, including
+  // its "0 unattested of N scanned" form, so a clean sweep and a blind one stay distinguishable to the
+  // agent reading the prompt. An unreadable scan says UNKNOWN in its own note.
+  if (closures?.note) withHint = `${withHint}\n${closures.note}`
   return steering
     ? `${withHint} Explicit steering from user: ${steering}`
     : withHint
@@ -98,6 +103,7 @@ const Runner = ({
             isNewTask,
             steering,
             reviewGaps: availability.reviewGaps || [],
+            closures: availability.closures || null,
           }),
           continueSession: !isNewTask,
           model,

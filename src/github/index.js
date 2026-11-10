@@ -184,7 +184,7 @@ const GitHubClient = ({
       '--limit',
       String(limit),
       '--json',
-      'number,title,labels,comments,body',
+      'number,title,labels,comments,body,closedAt',
     ])
     // The old `catch { return [] }` was the bug, not the guard. Four degraded shapes all landed in it
     // and each one emptied the collision set: empty stdout, an `<html>Server Error</html>` body,

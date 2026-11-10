@@ -6,6 +6,7 @@ const {
   isPrReviewedByAgent,
   prReviewGap,
   VERDICT_MARKERS,
+  scanUnattestedClosures,
 } = require('../../src/runner/preflight')
 
 describe('Runner: Backlog Preflight', () => {
@@ -507,6 +508,263 @@ describe('Runner: #90 review-gap causes, named instead of widened', () => {
     assert.equal(
       prReviewGap(prAt(CURRENT_HEAD, [liveWitness]), 'charlie').gap,
       'non-verdict-attestation',
+    )
+  })
+})
+// #99: the reporting half of #94. These arms exist because the scan's whole job is to distinguish "nothing
+// unattested" from "the read could not answer", and because it found two closures (#93, #53) that a
+// hand-run audit of the same night missed - so the fixture set encodes the shapes the fleet actually writes.
+const CLOSE_BODY_UNTICKED = [
+  '## Goal',
+  '',
+  'Ship the thing.',
+  '',
+  '## Done when',
+  '',
+  '- [ ] first criterion, not measured',
+  '- [ ] second criterion, not measured',
+].join('\n')
+
+const CLOSE_BODY_TICKED = [
+  '## Done when',
+  '',
+  '- [x] first criterion measured at 42/42',
+  '- [x] second criterion measured on main',
+].join('\n')
+
+const CLOSE_BODY_NUMBERED = [
+  '## Done when',
+  '',
+  '1. a numbered criterion, which has no tick mechanism at all',
+  '2. another numbered criterion',
+].join('\n')
+
+const CLOSE_BODY_MIXED = [
+  '## Done when',
+  '',
+  '- [x] one measured',
+  '- [ ] one outstanding',
+].join('\n')
+
+const HOUR = 60 * 60 * 1000
+const NOW = Date.parse('2026-11-10T00:00:00Z')
+const iso = (ms) => new Date(ms).toISOString().replace('.000Z', 'Z')
+
+describe('Runner: unattested-closure scan (#99)', () => {
+  const closedAtInside = iso(NOW - 2 * HOUR)
+  const closedAtOutside = iso(NOW - 40 * HOUR)
+
+  const makeGithub = (rows) => {
+    const calls = []
+    return {
+      calls,
+      listIssues: async (options = {}) => {
+        calls.push(options.state || 'open')
+        return (options.state || 'open') === 'closed' ? rows : []
+      },
+      listPrs: async () => [],
+    }
+  }
+
+  it('reports a closed-with-unticked issue and NOT the other three shapes', async () => {
+    const rows = [
+      { number: 1, closedAt: closedAtInside, body: CLOSE_BODY_UNTICKED },
+      { number: 2, closedAt: closedAtInside, body: CLOSE_BODY_TICKED },
+      { number: 3, closedAt: closedAtInside, body: CLOSE_BODY_NUMBERED },
+    ]
+    const github = makeGithub(rows)
+    const res = await scanUnattestedClosures({ github, now: () => NOW })
+    // the filter must be shown to FIRE, not merely to have not crashed
+    assert.equal(res.unattested.length, 1, 'exactly one shape is unattested')
+    assert.equal(res.unattested[0].number, 1)
+    assert.equal(res.unattested[0].unticked, 2)
+    assert.equal(res.unattested[0].boxes, 2)
+    assert.ok(
+      !res.unattested.some((u) => u.number === 2),
+      'a fully ticked close is clean',
+    )
+    assert.ok(
+      !res.unattested.some((u) => u.number === 3),
+      'a numbered Done-when is not attestable',
+    )
+    assert.deepEqual(
+      github.calls,
+      ['closed'],
+      'the scan reads the closed axis only',
+    )
+  })
+
+  it('never reports an OPEN issue, because an open one cannot be an unattested close', async () => {
+    // shape (d) of the selectivity bar: the unticked-boxes-without-a-close case must not appear, which the
+    // scan guarantees by asking for state closed - so the open row is absent from the fixture it is handed.
+    const rows = [
+      { number: 5, closedAt: closedAtInside, body: CLOSE_BODY_UNTICKED },
+    ]
+    const res = await scanUnattestedClosures({
+      github: makeGithub(rows),
+      now: () => NOW,
+    })
+    const openIssue = { number: 9, body: CLOSE_BODY_UNTICKED }
+    assert.equal(res.unattested.length, 1)
+    assert.ok(
+      !res.unattested.some((u) => u.number === openIssue.number),
+      'an open issue is outside this population by construction',
+    )
+  })
+
+  it('applies the window and NAMES it, so a bounded read is not mistaken for the whole history', async () => {
+    const rows = [
+      { number: 11, closedAt: closedAtInside, body: CLOSE_BODY_MIXED },
+      { number: 12, closedAt: closedAtOutside, body: CLOSE_BODY_UNTICKED },
+    ]
+    const res = await scanUnattestedClosures({
+      github: makeGithub(rows),
+      now: () => NOW,
+    })
+    assert.equal(res.inWindow, 1, 'the 40h-old close is outside the 6h window')
+    assert.deepEqual(
+      res.unattested.map((u) => u.number),
+      [11],
+    )
+    assert.ok(
+      res.note.includes('last 6h'),
+      `window stated in output: ${res.note}`,
+    )
+    assert.equal(res.windowHours, 6)
+    const wide = await scanUnattestedClosures({
+      github: makeGithub(rows),
+      now: () => NOW,
+      windowHours: 48,
+    })
+    assert.equal(
+      wide.inWindow,
+      2,
+      'widening the window reaches the older close',
+    )
+    assert.ok(
+      wide.note.includes('last 48h'),
+      'the stated window follows the parameter',
+    )
+  })
+
+  it('prints the population it examined on a clean sweep, so zero is not confused with blindness', async () => {
+    const rows = [
+      { number: 21, closedAt: closedAtInside, body: CLOSE_BODY_TICKED },
+    ]
+    const res = await scanUnattestedClosures({
+      github: makeGithub(rows),
+      now: () => NOW,
+    })
+    assert.equal(res.unattested.length, 0)
+    assert.ok(res.note.includes('1 closed issue(s) scanned'), res.note)
+    assert.ok(res.note.includes('1 closed within the last 6h'), res.note)
+    assert.ok(res.note.includes('0 unattested'), res.note)
+  })
+
+  it('reports UNKNOWN rather than a confident zero when the read fails', async () => {
+    const github = {
+      listIssues: async () => {
+        throw new Error('returned exactly 500 issues so the set is TRUNCATED')
+      },
+      listPrs: async () => [],
+    }
+    const res = await scanUnattestedClosures({ github, now: () => NOW })
+    assert.equal(res.readable, false)
+    assert.equal(res.scanned, 0)
+    assert.ok(res.note.includes('UNKNOWN'), res.note)
+    assert.ok(res.note.includes('CLOSED axis'), res.note)
+    assert.ok(
+      !/\b0 unattested\b/.test(res.note),
+      `a failed read must not print a clean count: ${res.note}`,
+    )
+  })
+
+  it('caps the listed names but says how many were dropped, newest first', async () => {
+    const rows = [1, 2, 3, 4, 5].map((n) => ({
+      number: n,
+      closedAt: iso(NOW - n * HOUR),
+      body: CLOSE_BODY_UNTICKED,
+    }))
+    const res = await scanUnattestedClosures({
+      github: makeGithub(rows),
+      now: () => NOW,
+    })
+    assert.equal(res.unattested.length, 5)
+    assert.ok(res.note.includes('(+2 more, newest first)'), res.note)
+    assert.ok(res.note.includes('#1 '), 'the newest close is listed first')
+    assert.ok(
+      !res.note.includes('#5 '),
+      'the oldest is inside the dropped count, not silently gone',
+    )
+  })
+
+  it('treats a row with no closedAt as outside the window, and still names the population', async () => {
+    // the shape a dropped `closedAt` select produces: the read succeeds, every closure is invisible to the
+    // window, and a bare count would read as a clean repo. The scanned number must survive to say so.
+    const rows = [{ number: 41, body: CLOSE_BODY_UNTICKED }]
+    const res = await scanUnattestedClosures({
+      github: makeGithub(rows),
+      now: () => NOW,
+    })
+    assert.equal(res.readable, true)
+    assert.equal(
+      res.inWindow,
+      0,
+      'no closedAt means no window membership can be claimed',
+    )
+    assert.equal(res.unattested.length, 0)
+    assert.ok(res.note.includes('1 closed issue(s) scanned'), res.note)
+    assert.ok(res.note.includes('0 closed within the last 6h'), res.note)
+  })
+
+  it('attaches the report to every dispatch-ready path so the agent actually sees it', async () => {
+    const closed = [
+      { number: 31, closedAt: closedAtInside, body: CLOSE_BODY_UNTICKED },
+    ]
+    const build = (openIssues) => ({
+      listIssues: async (options = {}) =>
+        (options.state || 'open') === 'closed' ? closed : openIssues,
+      listPrs: async () => [],
+    })
+    const unclaimed = await checkBacklogAvailability({
+      github: build([{ number: 40, labels: [], comments: [], body: '' }]),
+      agent: 'alpha',
+      now: () => NOW,
+    })
+    assert.equal(unclaimed.status, 'ready')
+    assert.ok(
+      unclaimed.closures?.note.includes('#31'),
+      'unclaimed_tasks carries the scan',
+    )
+    const owned = await checkBacklogAvailability({
+      github: build([
+        {
+          number: 41,
+          labels: [{ name: 'status:claimed' }],
+          comments: [{ body: '**CLAIM** | agent: agent-alpha' }],
+        },
+      ]),
+      agent: 'alpha',
+      now: () => NOW,
+    })
+    assert.equal(owned.reason, 'owned_claims')
+    assert.ok(
+      owned.closures?.note.includes('#31'),
+      'owned_claims carries the scan too',
+    )
+  })
+
+  it('leaves the empty-backlog path alone - no scan, no claim of cleanliness', async () => {
+    const res = await checkBacklogAvailability({
+      github: { listIssues: async () => [], listPrs: async () => [] },
+      agent: 'alpha',
+      now: () => NOW,
+    })
+    assert.equal(res.status, 'idle_empty')
+    assert.equal(
+      res.closures,
+      undefined,
+      'the scan did not run, so nothing is asserted about closures',
     )
   })
 })

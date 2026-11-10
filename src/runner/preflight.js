@@ -1,4 +1,5 @@
 const { isMine, cleanAgent } = require('../coord/owner')
+const { tickState } = require('../coord/tick-state')
 
 const NON_ACTIONABLE_LABELS = [
   'hub',
@@ -173,7 +174,98 @@ const prReviewGap = (pr, agent) => {
   }
 }
 
-const checkBacklogAvailability = async ({ github, agent = '' }) => {
+// #99: #94 stops the hand-typed `done`; this reaches the path that actually produced the six unattested
+// closes - GitHub's auto-close at merge, which no guard inside the verb can be on the call path for. The
+// report is deliberately population-first: a bare "0 unattested" cannot be told apart from a scan that
+// read nothing, and this fleet has been burned by that shape more than once, including in a `jq` wrap
+// that made a four-comment thread read as one.
+const UNATTESTED_WINDOW_HOURS = 6
+// No cap of our own: the read inherits `ISSUE_PAGE_CEILING` (500 on main, measured), because asking for a
+// smaller number is not a smaller read here - `listIssues` treats rows-at-the-requested-limit as TRUNCATED
+// and refuses. A repo whose whole closed set is above the ceiling therefore reports UNKNOWN rather than a
+// confident zero, which is the honest direction.
+const CLOSE_SCAN_LIMIT = null
+const MAX_CLOSURE_LINES = 3
+
+const scanUnattestedClosures = async ({
+  github,
+  now = Date.now,
+  windowHours = UNATTESTED_WINDOW_HOURS,
+  limit = CLOSE_SCAN_LIMIT,
+} = {}) => {
+  // an explicit `limit` of null lets listIssues apply its own ceiling ✓ the call must not forward the key
+  const options =
+    limit === null ? { state: 'closed' } : { state: 'closed', limit }
+
+  let closed
+  try {
+    closed = await github.listIssues(options)
+  } catch (err) {
+    // #85's rule, applied on this side of the API: an unreadable read is UNKNOWN, not clean.
+    return {
+      readable: false,
+      scanned: 0,
+      inWindow: 0,
+      windowHours,
+      unattested: [],
+      note:
+        'unattested-closure scan of the CLOSED axis: the read FAILED ' +
+        `(${String(err.message || err).split('\n')[0]}) - UNKNOWN, not clean. ` +
+        'Note the shared ceiling message speaks of the open set and the scope gate; this call is the ' +
+        'closed set, so an at-cap repo needs a bounded server-side read (or a raised ceiling) before ' +
+        'this scan can sweep it at all.',
+    }
+  }
+  const rows = closed || []
+  const cutoff = now() - windowHours * 60 * 60 * 1000
+  const inWindow = rows.filter((i) => {
+    const t = Date.parse(i.closedAt)
+    return Number.isFinite(t) && t >= cutoff
+  })
+  const unattested = inWindow
+    .map((i) => ({
+      number: i.number,
+      closedAt: i.closedAt,
+      state: tickState(i.body),
+    }))
+    .filter((r) => r.state.attestable && r.state.unticked > 0)
+    .map((r) => ({
+      number: r.number,
+      closedAt: r.closedAt,
+      ticked: r.state.ticked,
+      unticked: r.state.unticked,
+      boxes: r.state.boxes,
+    }))
+    .sort((a, b) => Date.parse(b.closedAt) - Date.parse(a.closedAt))
+  const shown = unattested.slice(0, MAX_CLOSURE_LINES)
+  const dropped = unattested.length - shown.length
+  const summary =
+    `${rows.length} closed issue(s) scanned, ` +
+    `${inWindow.length} closed within the last ${windowHours}h, ${unattested.length} unattested`
+  const list = shown
+    .map(
+      (s) => `#${s.number} ${s.ticked}/${s.boxes} ticked, closed ${s.closedAt}`,
+    )
+    .join('; ')
+  const tail = dropped > 0 ? ` (+${dropped} more, newest first)` : ''
+  return {
+    readable: true,
+    scanned: rows.length,
+    inWindow: inWindow.length,
+    windowHours,
+    unattested,
+    note:
+      unattested.length === 0
+        ? `unattested-closure scan: ${summary}`
+        : `unattested-closure scan: ${summary} - ${list}${tail}: these closed without anyone ticking a Done-when box, and #94's guard only covers the verb, so tick each box with its measurement or annotate why it cannot be met`,
+  }
+}
+
+const checkBacklogAvailability = async ({
+  github,
+  agent = '',
+  now = Date.now,
+}) => {
   const issues = await github.listIssues()
   const nonHubIssues = issues.filter(
     (i) => !i.labels?.some((l) => l.name === 'hub'),
@@ -187,6 +279,10 @@ const checkBacklogAvailability = async ({ github, agent = '' }) => {
     }
   }
 
+  // one extra read per dispatch cycle, bounded by CLOSE_SCAN_LIMIT rather than the full history: a
+  // a window of hours is the actionable population, and an unbounded scan would report the fleet's childhood.
+  const closures = await scanUnattestedClosures({ github, now })
+
   const allMyIssues = nonHubIssues.filter((i) => isMine(i, agent))
   const myActiveClaims = allMyIssues.filter(
     (i) => !i.labels?.some((l) => l.name === 'status:in-review'),
@@ -194,6 +290,7 @@ const checkBacklogAvailability = async ({ github, agent = '' }) => {
   if (myActiveClaims.length > 0) {
     return {
       status: 'ready',
+      closures,
       reason: 'owned_claims',
       count: myActiveClaims.length,
     }
@@ -203,6 +300,7 @@ const checkBacklogAvailability = async ({ github, agent = '' }) => {
   if (unclaimed.length > 0) {
     return {
       status: 'ready',
+      closures,
       reason: 'unclaimed_tasks',
       count: unclaimed.length,
     }
@@ -221,6 +319,7 @@ const checkBacklogAvailability = async ({ github, agent = '' }) => {
     // by the renderer, so the advice cannot drift from the state it describes.
     return {
       status: 'ready',
+      closures,
       reason: 'open_prs',
       count: reviewablePrs.length,
       reviewGaps: reviewablePrs.map((pr) => prReviewGap(pr, agent)),
@@ -236,6 +335,9 @@ const checkBacklogAvailability = async ({ github, agent = '' }) => {
 
 module.exports = {
   checkBacklogAvailability,
+  scanUnattestedClosures,
+  UNATTESTED_WINDOW_HOURS,
+  CLOSE_SCAN_LIMIT,
   isPrAuthoredByAgent,
   isPrReviewedByAgent,
   prReviewGap,
