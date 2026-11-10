@@ -6,6 +6,7 @@ const { WorkspaceManager } = require('../workspace')
 const { GitHubClient } = require('../github')
 const { CoordService } = require('../coord')
 const { Runner, SessionTracker } = require('../runner')
+const { CodeCurrency } = require('../runner/code-currency')
 const { pad } = require('../coord/formatters')
 const { requireIssueNumber, requireMessage } = require('../coord/issueNumber')
 const { Provenance } = require('./selfcheck')
@@ -80,6 +81,9 @@ const Cli = ({
   // acted on - which is the entire point of naming the target.
   github: customGithub,
   provenance = Provenance(),
+  // #122: same shape as `provenance` above - the tree-vs-process reading is a non-deterministic
+  // dependency (it spawns git), so it arrives through the factory and a test can hand it a fake.
+  codeCurrency = CodeCurrency(),
   stdout = console.log,
   stderr = console.error,
 } = {}) => {
@@ -369,7 +373,14 @@ const Cli = ({
       stdout(`[page] Starting agent '${agent}' on project '${project}'...`)
       stdout(`[page] Working directory: ${targetPath}`)
 
+      // #122: the note goes to stderr for the reason selfcheck.js records - a warning inside the
+      // board's own output breaks every agent grepping it. Read ONCE: `describe()` re-reads git, so
+      // calling it in a condition and again in the body could print an answer the condition never saw.
+      const startupCurrency = codeCurrency.describe()
+      if (startupCurrency) stderr(`[page] ${startupCurrency}`)
+
       const runner = Runner({
+        codeCurrency,
         github,
         agent,
         project,
