@@ -373,12 +373,10 @@ const Cli = ({
       stdout(`[page] Starting agent '${agent}' on project '${project}'...`)
       stdout(`[page] Working directory: ${targetPath}`)
 
-      // #122: the note goes to stderr for the reason selfcheck.js records - a warning inside the
-      // board's own output breaks every agent grepping it. Read ONCE: `describe()` re-reads git, so
-      // calling it in a condition and again in the body could print an answer the condition never saw.
-      const startupCurrency = codeCurrency.describe()
-      if (startupCurrency) stderr(`[page] ${startupCurrency}`)
-
+      // #122: passed to the loop rather than printed here. At boot `loadedSha` equals the tree by
+      // construction, so a startup line would fire only in a microsecond race and nothing could pin
+      // it - the case that matters is the daemon that has been alive an hour before its first spawn
+      // (measured: 2h13m old, 8 merges behind), and that is a per-cycle reading.
       const runner = Runner({
         codeCurrency,
         github,

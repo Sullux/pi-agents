@@ -1,5 +1,7 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
+const { readFileSync } = require('node:fs')
+const { join } = require('node:path')
 const { CodeCurrency } = require('../../src/runner/code-currency')
 const { Runner, resolveCyclePrompt } = require('../../src/runner')
 
@@ -153,12 +155,52 @@ describe('the runner composes the note into the prompt the session receives', ()
 
   it('carries it when the tree moved under the process (the wiring, not the formatter)', async () => {
     const { currency } = plan(moved())
-    const prompt = await capturePrompt(currency)
+    let captured = null
+    const runner = Runner({
+      github: mockGithub,
+      agent: 'bravo',
+      project: 'pp',
+      targetPath: '/tmp/test',
+      waitImpl: async () => false,
+      codeCurrency: currency,
+      sessionImpl: async (opts) => {
+        captured = opts
+        return { code: 0 }
+      },
+    })
+    const res = await runner.runLoop({ maxCycles: 1 })
     assert.ok(
-      prompt,
+      captured?.prompt,
       'no session prompt was captured: the arm measured nothing',
     )
-    assert.ok(prompt.includes('Code currency:'), prompt)
+    assert.ok(captured.prompt.includes('Code currency:'), captured.prompt)
+    // box 6: the note is advice, so it must not alter the loop's own outcome
+    assert.equal(res.stopped, true)
+    assert.equal(res.reason, 'max_cycles_reached')
+  })
+
+  // The `page start` branch cannot be driven in-process - it builds a real GitHubClient and a real pi
+  // session (no injectable seam there), so the call-site wiring gets a source-shape assert. That is
+  // strictly weaker than a drive and is stated as such in the PR rather than claimed as coverage.
+  it('src/cli/index.js hands the measurement to the Runner it starts', () => {
+    const src = readFileSync(
+      join(__dirname, '..', '..', 'src', 'cli', 'index.js'),
+      'utf8',
+    )
+    const from = src.indexOf('const runner = Runner({')
+    const block = src.slice(from, src.indexOf('const maxCycles'))
+    assert.ok(
+      from >= 0 && block.length > 0,
+      'the Runner call site moved - this pin must move with it',
+    )
+    assert.ok(
+      /\bcodeCurrency,/.test(block),
+      `start no longer wires the measurement:\n${block}`,
+    )
+    assert.ok(
+      !/startupCurrency/.test(src),
+      'the untestable startup print came back - it fires only in a race',
+    )
   })
 
   it('leaves it out when the tree is current, while still delivering the base prompt', async () => {
