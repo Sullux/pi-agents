@@ -945,7 +945,10 @@ describe('Coordination Engine: status-aware scope collision (#863)', () => {
   it('an owned issue with NO status label still fences, so the pre-#863 fixtures keep their meaning', () => {
     const res = checkScopeCollision(TARGET, [overlapping('')], 'bravo')
     assert.equal(res.hasCollision, true)
-    assert.equal(res.collidingStatus, 'unclaimed')
+    // #137: the status string follows the reader the board uses. This fixture carries a live
+    // CLAIM from echo with no label - the fence was always right, the NAME was the bug: the old
+    // label-default said `unclaimed` about a held issue. It now says what the board prints.
+    assert.equal(res.collidingStatus, 'claimed')
   })
 
   it('the owner skip is unchanged: your own in-flight issue never fences you', () => {

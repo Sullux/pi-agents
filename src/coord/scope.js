@@ -1,4 +1,4 @@
-const { ownerOf, cleanAgent } = require('./owner')
+const { ownerOf, cleanAgent, protocolStatus } = require('./owner')
 
 // #816: the heading must start a LINE, and fenced code blocks are skipped. This used to be
 // `body.match(/## Files\s*([\s\S]*?)(?:\n##|$)/)` - unanchored, so the first occurrence of that
@@ -182,6 +182,22 @@ const statusOf = (issue) =>
     .find((name) => name.startsWith('status:'))
     ?.replace('status:', '') || 'unclaimed'
 
+// #137: CANONICAL status reader for the whole coord module - the gate below and the board in
+// `formatters.js` both call THIS function, never a local copy. Labels are the whole truth when
+// they exist (`pitcairn`); in a repo with no `status:*` labels (`pi-agents`) `statusOf`'s
+// `|| 'unclaimed'` fallback is not a measurement, it is the absence of one, and the protocol
+// timeline is the only evidence left. Before this, the gate read labels-only and saw every
+// label-less held issue as `unclaimed`, so #863's soft rule was inert on the pi side and #76's
+// unheld-warning told a CLAIMed issue 'no claim yet'. Two copies of one fact is how three
+// agents ended up with three verb sets; one reader, here.
+const hasStatusLabel = (issue) =>
+  labelKeys(issue).some((name) => name.startsWith('status:'))
+
+const statusCell = (issue) => {
+  if (hasStatusLabel(issue)) return statusOf(issue)
+  return protocolStatus(issue) || statusOf(issue)
+}
+
 // #863: `in-review` means the work is FINISHED and awaiting a human or a teammate, so fencing
 // files against it blocks new work with completed work - measured 4 of 5 unclaimed issues frozen
 // this way on 2026-10-26, and #820 still frozen on 2026-10-27. The remedy for a second author is
@@ -262,11 +278,13 @@ const checkScopeCollision = (
     overlaps.push({
       issue: issue.number,
       agent: owner || UNHELD_AGENT,
-      status: statusOf(issue),
+      // #137: classified through the SHARED reader, so the soft/hard split can never again
+      // disagree with what the board prints beside the same issue number.
+      status: statusCell(issue),
       files: collidingFiles,
       unheld,
-      advice: warningAdvice({ unheld, status: statusOf(issue) }),
-      soft: unheld || SOFT_STATUSES.includes(statusOf(issue)),
+      advice: warningAdvice({ unheld, status: statusCell(issue) }),
+      soft: unheld || SOFT_STATUSES.includes(statusCell(issue)),
     })
   }
 
@@ -299,5 +317,7 @@ module.exports = {
   labelKeys,
   hasLabelName,
   statusOf,
+  hasStatusLabel,
+  statusCell,
   checkScopeCollision,
 }
