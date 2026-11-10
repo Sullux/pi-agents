@@ -55,11 +55,25 @@ const targetOf = (body = '') => {
 // the issue is still OPEN, because a reopen followed. The holder was fenced out of their own
 // issue by a close-out they did not sign, and the reopen looked free.
 //
-// So a close-out de-owns only its own poster:
-//   CLAIM                 -> holder := the poster
+// So a close-out de-owns only its own poster, and (pi-agents#102) a claim-out is earliest-wins:
+//   CLAIM                 -> holder := the poster, ONLY when the slot is empty - Rule C in the fold
 //   HANDOFF               -> holder := the `to:` target
 //   RELEASE|DONE, poster == holder, or the line names no poster -> holder := ''
 //   RELEASE|DONE, poster != holder (a third-party close-out)    -> holder unchanged
+//
+// #102 restated the CLAIM line from `agent || owner` to `owner || agent`, and it is a precedence
+// rule, not another guard beside the fold - see the ordering argument recorded in the #96 header:
+// a rule nobody calls is a comment. pitcairn#1218's four real bytes are the witness: bravo claimed
+// at 00:04:32Z, alpha stamped 12 seconds later (the old fold MOVED the holder to alpha), then alpha
+// RELEASED twice as the honest loser - poster == holder after the displacement, so #12's own
+// clearing guard fired and the issue projected OWNERLESS while the earliest claim still stood
+// uncontested. Concede-with-credit was supposed to be SAFE; under last-wins it deleted the real
+// owner, which is the #238 pileup arriving from the parser side. The handoff routes that remain are
+// the holder's own RELEASE (slot empties, the next CLAIM takes) or a HANDOFF naming the recipient;
+// a late CLAIM is a Rule-C loser and the fold now says so structurally. Consequence for #52: the
+// race was always earliest-wins while ownership was last-word, and its header documented the
+// disagreement as a fact - folding Rule C removes the divergence, so the rival-after-me arm of
+// test/cli/claim-selfcheck.test.js is restated there, not deleted.
 //
 // The unattributed branch keeps the existing pins' behavior (both synthetic close-outs in
 // test/coord/coord.test.js name no `agent:`): a line we cannot attribute is the last word
@@ -76,7 +90,7 @@ const targetOf = (body = '') => {
 const applyMarker = (owner, body) => {
   const kind = markerOf(body)
   const agent = agentOf(body)
-  if (kind === 'CLAIM') return agent || owner
+  if (kind === 'CLAIM') return owner || agent
   if (kind === 'HANDOFF') return targetOf(body) || owner
   if (kind === 'RELEASE' || kind === 'DONE')
     return !agent || agent === owner ? '' : owner

@@ -412,3 +412,72 @@ describe('scope gate #83: held-but-unattributable is not the same advice as free
     )
   })
 })
+
+// #102, the gate half of the same incident: with the OLD fold these four live bytes produced
+// `{ hasCollision: false, warnings: [{ soft: true, agent: 'nobody', ... }] }` - a fresh agent
+// reaching for AGENTS.md got an ADVISORY against a file bravo held under an uncontested earliest
+// claim. Restating the fixture here (not only in owner-parse.test.js) is the point: the fold is
+// allowed to be right about ownership while the gate still fails to fence on it, and #76's whole
+// lesson was that a lost `if (!owner) continue` skip is only visible from the caller's side.
+
+describe('#102: the live #1218 timeline is a HARD fence for every other agent', () => {
+  const CLAIM_B = {
+    body: '**CLAIM** | agent: agent-bravo | human: @Sullux | at: 1794269072270\n\nscope: overlapping open work\n- #1213 (charlie) on AGENTS.md - rebase owed after it merges (status:in-review)\n- #1208 (alpha) on AGENTS.md - rebase owed after it merges (status:in-review)',
+  }
+  const CLAIM_A = {
+    body: '**CLAIM** | agent: agent-alpha | human: @Sullux | at: 1794269083651\n\nplan: branch: docs/1218-merge-tree-discriminator\n\nscope: overlapping open work\n- #1213 (charlie) on AGENTS.md - rebase owed after it merges (status:in-review)',
+  }
+  const REL_A1 = {
+    body: '**RELEASE** | agent: agent-alpha | reason: lost claim race to bravo',
+  }
+  const REL_A2 = {
+    body: '**RELEASE** | agent: agent-alpha | reason: LOST the simultaneous race - bravo CLAIM stamped 00:04:32Z, mine 00:04:44Z, earliest wins per Rule C. Standing down clean so ownerOf-last-word does not mis-show me as holder. 00:05:05Z',
+  }
+
+  it('a later claimant gets a refusal naming the earliest holder, and zero soft warnings', () => {
+    const held = issue(
+      1218,
+      '## Files\nAGENTS.md',
+      [CLAIM_B, CLAIM_A, REL_A1, REL_A2],
+      [{ name: 'status:claimed' }],
+    )
+    const res = checkScopeCollision(
+      ['AGENTS.md'],
+      [held],
+      'echo',
+      target(999999, '## Files\nAGENTS.md'),
+    )
+    assert.equal(
+      res.hasCollision,
+      true,
+      `the earliest claim must fence the file, not advise: ${JSON.stringify(res)}`,
+    )
+    assert.equal(res.collidingAgent, 'bravo')
+    assert.equal(res.collidingIssue, 1218)
+    assert.deepEqual(
+      res.warnings,
+      [],
+      'no soft pass-through: `agent: nobody` + soft was the measured hole, and its absence is half the proof',
+    )
+  })
+
+  it('and bravo re-reaching their OWN issue is still waved through by the owner-match', () => {
+    const held = issue(
+      1218,
+      '## Files\nAGENTS.md',
+      [CLAIM_B, CLAIM_A, REL_A1, REL_A2],
+      [],
+    )
+    const res = checkScopeCollision(
+      ['AGENTS.md'],
+      [held],
+      'bravo',
+      target(999999, '## Files\nAGENTS.md'),
+    )
+    assert.equal(
+      res.hasCollision,
+      false,
+      'self-collision is exempt - precedence does not lock the holder out of their own scope',
+    )
+  })
+})

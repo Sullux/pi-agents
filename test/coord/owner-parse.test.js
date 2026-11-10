@@ -6,6 +6,7 @@ const {
   isMine,
   hasClaimBy,
   unresolvedProtocolLines,
+  protocolStatus,
 } = require('../../src/coord/owner')
 
 // #49: a CLAIM whose identity field does not parse resolved to no owner at all, which freed
@@ -188,5 +189,85 @@ describe('owner.js: hasClaimBy sees the author for every shape ownerOf resolves 
     const timeline = issue('**CLAIM** | agent: agent-delta')
     assert.equal(hasClaimBy(timeline.comments, 'agent-Bravo'), false)
     assert.equal(hasClaimBy(timeline.comments, 'agent-Delta'), true)
+  })
+})
+
+// #102: Rule C in the FOLD. These four bodies are the real pitcairn#1218 comment timeline,
+// verbatim off `gh api repos/Sullux/pitcairn-portal/issues/comments` (ids in order:
+// 6754889310, 6754892710, 6754893522, 6754899311). Bravo claimed at 00:04:32Z; alpha stamped
+// 12 seconds later and, seeing the loss, released TWICE with the reason spelled out - the honest
+// loser of a simultaneous race. Under the old `agent || owner` the fold moved to alpha at line
+// two, alpha's own release then matched poster == holder and cleared the slot, and the issue
+// projected OWNERLESS over an uncontested earliest claim. `owner || agent` ends that: a late
+// CLAIM cannot displace, and a concession can no longer delete a holder it never legitimately had.
+
+const CL_1218_BRAVO = `**CLAIM** | agent: agent-bravo | human: @Sullux | at: 1794269072270
+
+plan: _(none given)_
+eta: _(none given)_
+
+scope: overlapping open work
+- #1213 (charlie) on AGENTS.md - rebase owed after it merges (status:in-review)
+- #1208 (alpha) on AGENTS.md - rebase owed after it merges (status:in-review)`
+
+const CL_1218_ALPHA = `**CLAIM** | agent: agent-alpha | human: @Sullux | at: 1794269083651
+
+plan: branch: docs/1218-merge-tree-discriminator; measure all three rc shapes then extend the merge-preview bullet in AGENTS.md
+eta: 35m
+
+scope: overlapping open work
+- #1213 (charlie) on AGENTS.md - rebase owed after it merges (status:in-review)`
+
+const REL_1218_A =
+  '**RELEASE** | agent: agent-alpha | reason: lost claim race to bravo'
+
+const REL_1218_B = `**RELEASE** | agent: agent-alpha | reason: LOST the simultaneous race - bravo CLAIM stamped 00:04:32Z, mine 00:04:44Z, earliest wins per Rule C. Standing down clean so ownerOf-last-word does not mis-show me as holder; my tool-run itself reported the loss. 12 seconds is the width of the window, which is the recorded face, not a new one. 00:05:05Z`
+
+describe('#102: the live #1218 bytes fold to the EARLIEST holder', () => {
+  const four = () => ({
+    comments: [
+      { body: CL_1218_BRAVO },
+      { body: CL_1218_ALPHA },
+      { body: REL_1218_A },
+      { body: REL_1218_B },
+    ],
+  })
+
+  it('ownerOf answers bravo - both halves of the incident are refused at once', () => {
+    assert.equal(ownerOf(four()), 'bravo')
+    // the displacement half AND the clearing half: either alone leaves the other reachable.
+    assert.equal(
+      ownerOf({ comments: [{ body: CL_1218_BRAVO }, { body: CL_1218_ALPHA }] }),
+      'bravo',
+      'the late claim alone does not move the holder',
+    )
+    assert.equal(
+      ownerOf({ comments: [{ body: CL_1218_BRAVO }, { body: REL_1218_A }] }),
+      'bravo',
+      'and a concession release by a NON-holder clears nobody',
+    )
+  })
+
+  it('isMine agrees with the fold, so the late claimer cannot `done` the earliest holder work', () => {
+    assert.equal(isMine(four(), 'agent-bravo'), true)
+    assert.equal(isMine(four(), 'agent-alpha'), false)
+  })
+
+  it('hasClaimBy still sees alpha (the #28 escape hatch is unaffected by precedence)', () => {
+    // alpha DID sign a CLAIM - the hatch answers "did this agent ever claim", which is exactly
+    // the question that must keep its old behavior or reopen-then-reclose flows break.
+    assert.equal(hasClaimBy(four().comments, 'agent-alpha'), true)
+    assert.equal(hasClaimBy(four().comments, 'agent-bravo'), true)
+  })
+
+  it('unresolvedProtocolLines reads all four as RESOLVED - the hole was precedence, not parseability', () => {
+    assert.deepEqual(unresolvedProtocolLines(four().comments), [])
+  })
+
+  it('protocolStatus follows the fold: these bytes were board-visible as `unclaimed` before #102', () => {
+    // Old fold: '' owner + zero unresolved lines -> 'unclaimed', so the board offered the file to
+    // everyone while bravo worked it. New fold: ownerOf truthy -> 'claimed'. Same reduce, same
+    // answer, which is the #66 contract this derives from.
+    assert.equal(protocolStatus(four()), 'claimed')
   })
 })
