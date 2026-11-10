@@ -1,1 +1,8 @@
 node_modules
+/tmp/
+/dist/
+/test-results/
+/playwright-report/
+/.pi-metrics.json
+/.pi-processes.json
+/.pi/
