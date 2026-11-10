@@ -1,5 +1,12 @@
 const { ownerOf, cleanAgent, protocolStatus } = require('./owner')
-const { parseScope, labelKeys, hasLabelName, statusOf } = require('./scope')
+const {
+  parseScope,
+  labelKeys,
+  hasLabelName,
+  statusOf,
+  hasStatusLabel,
+  statusCell,
+} = require('./scope')
 const { isIssueNumber } = require('./issueNumber')
 
 // #15: `labelNames` (scope.js) tolerates BOTH shapes a caller can hand us - gh's object labels
@@ -32,12 +39,9 @@ const pad = (str = '', len = 0) =>
 // agent spends a claim attempt discovering it.
 const scopeCell = (body) => parseScope(body).join(' ') || '!!NO-SCOPE'
 
-// #66: does this issue carry ANY status label? If it does, that label is the whole truth for the
-// cell and nothing below runs, so a repo that labels its issues (pitcairn) cannot shift by one
-// byte. If it does not, `statusOf`'s `|| 'unclaimed'` fallback is not a measurement - it is the
-// absence of one - and the CLAIM timeline is the only evidence left.
-const hasStatusLabel = (issue) =>
-  labelKeys(issue).some((name) => name.startsWith('status:'))
+// #137: `hasStatusLabel` and `statusCell` MOVED to `scope.js` so the gate classifies soft-vs-hard
+// through the SAME reader the board prints - see the canonical comment there. The board keeps
+// importing them; a second copy here is what this file used to be.
 
 // #66: the timeline can only ever say held / free / review, while labels carry finer states
 // (`in-progress`, `blocked`) that all mean held. Comparing the raw strings would call an
@@ -53,11 +57,6 @@ const STATUS_COARSE = {
 }
 
 const coarseStatus = (name) => STATUS_COARSE[name] || name
-
-const statusCell = (issue) => {
-  if (hasStatusLabel(issue)) return statusOf(issue)
-  return protocolStatus(issue) || statusOf(issue)
-}
 
 const formatBoard = (issues = [], currentAgent = '', repo = '') => {
   const cleanCurrent = cleanAgent(currentAgent)
