@@ -1,6 +1,6 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
-const { GitHubClient } = require('../../src/github')
+const { GitHubClient, isKindReadFailure } = require('../../src/github')
 const { CoordService } = require('../../src/coord')
 
 // #41: from a directory with no .git, `page coord hub "..."` exited 1 having posted nothing, and
@@ -259,11 +259,19 @@ describe('repo resolution and error attribution (#41)', () => {
         execFile: probeThrows(calls),
         cwd: '/nope',
       })
-      const kind = await client.issueKind(27)
-      assert.equal(
-        kind,
-        undefined,
-        'the probe stays honest about not knowing instead of throwing up through the guard',
+      // #118 changed WHICH promise this arm proves, and kept the load-bearing half: no `gh api`
+      // spawn. The old expectation ("stays honest by answering undefined") is exactly the fail-open
+      // that #118 removes, so the probe now throws a tagged failure whose reason still names the
+      // no-repo cause - and the guard turns that into a refusal rather than a write.
+      const err = await client.issueKind(27).catch((error) => error)
+      assert.ok(
+        isKindReadFailure(err),
+        `a no-repo read must throw the tagged failure, got: ${JSON.stringify(err)?.slice(0, 90)}`,
+      )
+      assert.match(
+        err.message,
+        /no target repo, so nothing was sent to GitHub/,
+        'the cause is quoted inside the tagged failure, not swallowed',
       )
       assert.deepEqual(
         calls,
@@ -282,13 +290,26 @@ describe('repo resolution and error attribution (#41)', () => {
         human: 'Sullux',
         now: () => 1,
       })
-      const err = await assert.rejects(
-        () => coord.claim(27, { plan: SECRET_BODY, eta: '5m' }),
+      // #118: the verb no longer REJECTS through the guard, it REFUSES with a message - which is
+      // the friendlier half of fail-closed and still satisfies #57's promise ("nothing was sent").
+      const res = await coord.claim(27, { plan: SECRET_BODY, eta: '5m' })
+      assert.equal(
+        res.ok,
+        false,
+        'a verb whose kind read cannot complete must refuse rather than assume the target is open',
+      )
+      assert.match(
+        res.error,
         /no target repo, so nothing was sent to GitHub/,
-        'the verb must fail with the probe named as the cause',
+        'and the refusal names the probe as the cause',
+      )
+      assert.match(
+        res.error,
+        /could not be READ/,
+        'the operator hears this is a failed read, not a CLOSED artifact',
       )
       assert.ok(
-        !String(err?.message).includes(SECRET_BODY),
+        !String(res.error).includes(SECRET_BODY),
         'and the plan text must not ride along in the error',
       )
       assert.deepEqual(

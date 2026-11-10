@@ -6,7 +6,7 @@ describe('Coordination Protocol: Service Methods', () => {
   it('hub command strips leading subverbs and formats SYNC comment', async () => {
     let posted = []
     const mockGithub = {
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       // #53: hub() resolves its target from the repo's own issues now, so the double
       // declares one carrying the `hub` label. Fidelity only - assertions untouched.
       listIssues: async () => [
@@ -77,7 +77,7 @@ describe('Coordination Protocol: Service Methods', () => {
     const posted = []
     const coord = CoordService({
       github: {
-        issueKind: async () => ({ isPullRequest: false }),
+        issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
         // #53: hub() resolves its target from the repo's own issues now, so the double
         // declares one carrying the `hub` label. Fidelity only - assertions untouched.
         listIssues: async () => [
@@ -156,7 +156,7 @@ describe('Coordination Protocol: Service Methods', () => {
     const posted = []
     const coord = CoordService({
       github: {
-        issueKind: async () => ({ isPullRequest: false }),
+        issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
         // #53: hub() resolves its target from the repo's own issues now, so the double
         // declares one carrying the `hub` label. Fidelity only - assertions untouched.
         listIssues: async () => [
@@ -231,7 +231,7 @@ describe('Coordination Protocol: Service Methods', () => {
     let commented = []
 
     const mockGithub = {
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       // #53: hub() resolves its target from the repo's own issues now, so the double
       // declares one carrying the `hub` label. Fidelity only - assertions untouched.
       listIssues: async () => [
@@ -274,7 +274,7 @@ describe('Coordination Protocol: Service Methods', () => {
     let commented = []
 
     const mockGithub = {
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       // #53: hub() resolves its target from the repo's own issues now, so the double
       // declares one carrying the `hub` label. Fidelity only - assertions untouched.
       listIssues: async () => [
@@ -510,7 +510,7 @@ describe('coord hub stamps its own line (#29 guard 2)', () => {
     const posted = []
     const coord = CoordService({
       github: {
-        issueKind: async () => ({ isPullRequest: false }),
+        issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
         // #53: hub() resolves its target from the repo's own issues now, so the double
         // declares one carrying the `hub` label. Fidelity only - assertions untouched.
         listIssues: async () => [
@@ -612,7 +612,7 @@ describe('coord label mutation is best-effort (#34)', () => {
     }
     const coord = CoordService({
       github: {
-        issueKind: async () => ({ isPullRequest: false }),
+        issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
         // #53: hub() resolves its target from the repo's own issues now, so the double
         // declares one carrying the `hub` label. Fidelity only - assertions untouched.
         listIssues: async () => [
@@ -778,7 +778,7 @@ describe('#28 done refuses to close an issue the caller does not hold', () => {
   }) => {
     const writes = []
     const github = {
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       // #53: hub() resolves its target from the repo's own issues now, so the double
       // declares one carrying the `hub` label. Fidelity only - assertions untouched.
       listIssues: async () => [
@@ -1044,7 +1044,7 @@ describe('#71: one case rule answers "does this issue carry label X" across src/
     const posted = []
     const coord = require('../../src/coord').CoordService({
       github: {
-        issueKind: async () => ({ isPullRequest: false }),
+        issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
         listIssues: async () => [
           decoy,
           { number: 12, title: 'Hub', body: '', labels, comments: [] },

@@ -61,7 +61,7 @@ const timeline = () => {
   return tl
 }
 if (joined.startsWith('api ')) {
-  console.log(JSON.stringify({ isPullRequest: false, title: '#52 stub fixture', body: '## Files\\nsrc/foo.js' }))
+  console.log(JSON.stringify({ isPullRequest: false, state: 'OPEN', stateReason: '', title: '#52 stub fixture', body: '## Files\\nsrc/foo.js' }))
 } else if (joined.startsWith('issue comment')) {
   fs.writeFileSync(path.join(dir, 'c-' + String(posted().length).padStart(3, '0')), args[args.indexOf('--body') + 1])
   console.log('{}')
@@ -160,7 +160,7 @@ describe('#52 claim attests that its own CLAIM line resolves', () => {
     const posted = []
     const coord = CoordService({
       github: {
-        issueKind: async () => ({ isPullRequest: false }),
+        issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
         viewIssue: async () => ({
           number: 7,
           body: '## Files\nsrc/foo.js',

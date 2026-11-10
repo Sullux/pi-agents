@@ -34,7 +34,7 @@ const harness = ({ sub, extra = [], fail = true, labels } = {}) => {
     coordFactory: ({ agent }) =>
       CoordService({
         github: {
-          issueKind: async () => ({ isPullRequest: false }),
+          issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
           viewIssue: async () => ({
             ...issue,
             comments: [
@@ -204,7 +204,7 @@ describe('page coord reports a failed label edit as a warning, not a failure (#3
       coordFactory: ({ agent }) =>
         CoordService({
           github: {
-            issueKind: async () => ({ isPullRequest: false }),
+            issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
             viewIssue: async () => ({
               number: 34,
               body: '## Goal\nno Files section at all',

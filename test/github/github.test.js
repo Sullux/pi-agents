@@ -4,6 +4,7 @@ const { execFileSync } = require('node:child_process')
 const {
   GitHubClient,
   resolveRepoFromRemote,
+  isKindReadFailure,
   GH_MAX_BUFFER,
   NODE_DEFAULT_MAX_BUFFER,
 } = require('../../src/github')
@@ -230,17 +231,61 @@ describe('#126 kind casing and the per-issue timeline read', () => {
     )
   })
 
-  it('issueKind still answers undefined when the read fails - #118 owns that half', async () => {
-    // Deliberate: the fail-open path is #118's, and it needs src/coord/index.js (alpha's #124 is
-    // editing it) plus the fixture re-pin in delta's #121. Pinned unchanged so nobody reads my
-    // casing edit as that fix, and so a later throw-on-error change reddens HERE first.
+  it('#118: a failed read THROWS a tagged failure instead of answering undefined', async () => {
+    // This arm pinned the OPPOSITE until #118 landed - `assert.equal(await client.issueKind(94),
+    // undefined)` with a comment promising the fail-open path was #118's to fix. The two facts are
+    // now separated at the source: a read that FAILED throws and cannot be mistaken for a payload,
+    // while a read that SUCCEEDED with no `state` answers normally and is refused by the guard.
+    // The tag matters as much as the throw: a caller distinguishing "the artifact is gone" from "I
+    // could not look" reads `isKindReadFailure`, not a message string.
     const client = GitHubClient({
       repo: 'Sullux/pi-agents',
       execFile: () => {
         throw new Error('gh: HTTP 502')
       },
     })
-    assert.equal(await client.issueKind(94), undefined)
+    const settled = await client.issueKind(94).then(
+      (value) => ({ resolved: value }),
+      (error) => ({ error }),
+    )
+    assert.equal(
+      settled.resolved,
+      undefined,
+      'a failed read must not resolve to a value that `kind?.state` can read as open',
+    )
+    const err = settled.error
+    assert.ok(isKindReadFailure(err), `the throw must be tagged, got: ${err?.message}`)
+    assert.equal(err.number, 94, 'and it carries the number it could not resolve')
+    assert.match(
+      err.message,
+      /HTTP 502/,
+      'the transport error is quoted, so the operator can act on the cause',
+    )
+  })
+
+  it('#118: unparsable stdout is the same class as a transport error', async () => {
+    // `gh api` can answer a rate-limit page or an empty body, and the old single `catch` folded that
+    // into the same `undefined` as a dropped socket - so "the parse broke" and "there is no network"
+    // were one value. Both now throw the tagged failure; the reason string keeps them distinct.
+    for (const [label, stdout] of [
+      ['an HTML error page', '<html>Server Error</html>'],
+      ['an empty body', ''],
+    ]) {
+      const err = await GitHubClient({
+        repo: 'Sullux/pi-agents',
+        execFile: () => stdout,
+      })
+        .issueKind(94)
+        .catch((error) => error)
+      assert.ok(
+        isKindReadFailure(err),
+        `${label} must be a tagged read failure, got: ${JSON.stringify(err)?.slice(0, 80)}`,
+      )
+      assert.ok(
+        `${err.reason}`.length > 0,
+        `${label} must name its own cause, so the operator retries the right thing`,
+      )
+    }
   })
 
   it('issueTimeline is exported, paginates inside one issue, and flattens', async () => {

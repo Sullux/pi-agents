@@ -405,18 +405,24 @@ test("the recorder's probe answers per-number - the fixture's own non-vacuity fl
   )
 })
 
-test('an unresolvable number is not reported as a pull request (the probe is honest about not knowing)', async () => {
+test('#118 re-pins this arm: a read that answers nothing is a REFUSAL, not a pass-through', async () => {
+  // It used to assert the opposite - "a missing kind probe falls through to the verb" - because a
+  // double that knew nothing and a target that was open were the same `undefined`. #118 separated
+  // them, so silence about the target now costs a retry instead of a write onto somebody's board.
   const github = {
     ...recorder({ isPullRequest: false }),
     issueKind: async () => undefined,
   }
   const coord = serviceOver(github)
   const res = await coord.status(21, 'text')
-  assert.notEqual(
-    res.ok,
-    false,
-    'a missing kind probe falls through to the verb, which reads it itself',
+  assert.equal(res.ok, false, 'a verb cannot post onto a target it could not read')
+  assert.match(res.error, /could not be READ/, 'and the message names a failed read')
+  assert.match(
+    res.error,
+    /state=null, not OPEN/,
+    'naming the value it got, so the operator can tell silence from CLOSED',
   )
+  assert.deepEqual(github.writes, [], 'nothing was written')
 })
 
 // #106: the STATE half. pitcairn#1218 is the witness: auto-closed by PR #1225's Closes trailer at
@@ -516,7 +522,13 @@ test('#106 #1218 replay: review --pr against a CLOSED/COMPLETED target refuses B
   )
 })
 
-test('#106 box 3: a double with NO state field behaves as open - the guard fires only on an explicit CLOSED, so no pre-#106 fixture is quietly refused', async () => {
+test('#106 box 3, re-pinned by #118: the state test is an ALLOW-LIST - only an explicit OPEN passes', async () => {
+  // #106 chose a deny-list (`=== 'CLOSED'` refuses, everything else writes) so that no pre-#106
+  // fixture would be quietly refused. #118 takes the quiet refusal back as the price, because the
+  // "everything else" bucket is where a failed read was living: pitcairn#1218's write and a `gh`
+  // blip produced identical values. Every double in this repo now opts into `state: 'OPEN'`
+  // explicitly (31 single-line sites plus the shims' transport payloads), which is what the #106
+  // comment called fixture ergonomics and #118 calls an unguarded default.
   const github = {
     ...recorder({ isPullRequest: false }),
     issueKind: async (number) => ({
@@ -528,8 +540,14 @@ test('#106 box 3: a double with NO state field behaves as open - the guard fires
   }
   const results = await callEach(github)
   for (const [verb, res] of results) {
-    assert.notEqual(res.ok, false, `${verb}: undefined state is not a refusal`)
+    assert.equal(res.ok, false, `${verb}: a state this guard cannot name must not be written to`)
+    assert.match(res.error, /could not be READ/, `${verb}: same refusal, read-shaped`)
   }
+  assert.deepEqual(
+    github.writes,
+    [],
+    'five verbs, zero protocol lines - the refusal is the whole effect',
+  )
 })
 
 // #119: two sentences in `src/coord/index.js`'s guard comment were invisible to every arm above, so a
@@ -603,4 +621,72 @@ test('#119 arm 2: done --force against a CLOSED target still refuses - "force do
     [],
     'the proof is the CALL LIST: no protocol comment, no label, no close under --force',
   )
+})
+
+
+// --------------------------------------------------------------------------- #118
+// Three facts this file did not have, and the guard could not have had before the read itself was
+// able to say "I failed". Each arm is written so that REVERTING the allow-list turns it green while
+// the arms above stay green too - that is the discrimination the issue's box 4 asks for, run here
+// rather than described there.
+
+test('#118: every mutating verb refuses when the kind read THROWS - a gh blip is not OPEN', async () => {
+  const github = {
+    ...recorder({ isPullRequest: false }),
+    issueKind: async () => {
+      throw new Error('gh: HTTP 502')
+    },
+  }
+  const results = await callEach(github)
+  assert.equal(results.length, 5, 'all five mutating verbs are behind this guard')
+  for (const [verb, res] of results) {
+    assert.equal(res.ok, false, `${verb}: an unreadable target must refuse`)
+    assert.match(res.error, /could not be READ/, `${verb}: the message names a read failure`)
+    assert.match(res.error, /502/, `${verb}: and quotes the transport error, not a stack`)
+    assert.match(
+      res.error,
+      /`--force` does not override/,
+      `${verb}: says what force does NOT mean, since #106 made CLOSED non-forceable too`,
+    )
+  }
+  assert.deepEqual(
+    github.writes,
+    [],
+    'the board is untouched: no comment, no label, no close - the pitcairn#1218 write never happens',
+  )
+})
+
+test('#118 control: a double that opts into state OPEN lets all five verbs through (the refusal is conditional)', async () => {
+  // The pair that makes the arm above a measurement rather than a tautology: identical harness,
+  // identical recorder, one field different. If the guard refused unconditionally this arm reddens,
+  // and if it still failed open the arm above reddens - so both directions are pinned.
+  const github = recorder({ isPullRequest: false, state: 'OPEN' })
+  const results = await callEach(github)
+  for (const [verb, res] of results) {
+    assert.notEqual(res.ok, false, `${verb}: OPEN must reach the write path, got ${res.error}`)
+  }
+  assert.ok(
+    github.writes.length >= 5,
+    'the control proves the verbs actually wrote, so the zero above bites - got ' +
+      github.writes.length,
+  )
+})
+
+test('#118: done --force does not override an unreadable read', async () => {
+  // #106 made "--force does not override" a claim about CLOSED alone (delta pinned that at arm 577
+  // with a CLOSED target). The unreadable branch inherits the same rule by construction, and the
+  // sentence in `unreadableRefusal` is a promise this arm can falsify: force means "I know it is
+  // closed", never "I could not look".
+  const github = {
+    ...recorder({ isPullRequest: false }),
+    issueKind: async () => {
+      throw new Error('gh: rate limit exceeded')
+    },
+  }
+  const coord = serviceOver(github)
+  const res = await coord.done(21, { force: true })
+  assert.equal(res.ok, false, 'force skips the tick check, it does not skip the read')
+  assert.match(res.error, /could not be READ/, 'the refusal is the read-shaped one')
+  assert.match(res.error, /rate limit exceeded/, 'with the real cause quoted')
+  assert.deepEqual(github.writes, [], 'and --force writes nothing here either')
 })

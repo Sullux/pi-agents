@@ -249,7 +249,7 @@ describe('#26 the claim path reports the reason, not just the refusal', () => {
     const timeline = []
     const coord = CoordService({
       github: {
-        issueKind: async () => ({ isPullRequest: false }),
+        issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
         viewIssue: async (number) => ({
           number,
           title: '#26 fixture',
