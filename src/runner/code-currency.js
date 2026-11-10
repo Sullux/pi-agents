@@ -38,7 +38,8 @@ const defaultGit = (cwd) => (args) =>
 
 const short = (sha = '') => sha.slice(0, 7)
 
-const ageMinutes = (bootMs, nowMs) => Math.max(0, Math.round((nowMs - bootMs) / 60000))
+const ageMinutes = (bootMs, nowMs) =>
+  Math.max(0, Math.round((nowMs - bootMs) / 60000))
 
 // The commit-count phrase is where an operator learns how much merged behavior is missing, so a
 // missing answer degrades to "unknown" rather than to a number: `rev-list --count` on a SHAs-that-
@@ -47,12 +48,17 @@ const ageMinutes = (bootMs, nowMs) => Math.max(0, Math.round((nowMs - bootMs) / 
 const countPhrase = (raw) => {
   if (raw === '') return ', commit count unknown (git could not answer)'
   const behind = Number(raw)
-  if (!Number.isFinite(behind)) return ', commit count unknown (git could not answer)'
-  if (behind === 0) return ', and the tree moved to a ref that is not a descendant - the branch was switched'
+  if (!Number.isFinite(behind))
+    return ', commit count unknown (git could not answer)'
+  if (behind === 0)
+    return ', and the tree moved to a ref that is not a descendant - the branch was switched'
   return ` - ${behind} merge${behind === 1 ? '' : 's'} landed since`
 }
 
-const CodeCurrency = ({ git = defaultGit(PACKAGE_ROOT), now = Date.now } = {}) => {
+const CodeCurrency = ({
+  git = defaultGit(PACKAGE_ROOT),
+  now = Date.now,
+} = {}) => {
   // one try/catch per reading, so a missing git or a non-repo degrades a field, not the cycle
   const read = (args) => {
     try {
