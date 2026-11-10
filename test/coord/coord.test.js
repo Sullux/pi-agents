@@ -1110,8 +1110,12 @@ describe('Coordination Engine: a third-party close-out does not de-own (pi-agent
     assert.equal(ownerOf(mk([CLAIM_ALPHA, DONE_ALPHA])), '')
     // an unattributed close-out still clears (documented divergence from race.js, below).
     assert.equal(ownerOf(mk([CLAIM_ALPHA, DONE_UNATTRIBUTED])), '')
-    // a fresh claim after a third-party DONE takes the issue honestly.
-    assert.equal(ownerOf(mk([CLAIM_ALPHA, DONE_BRAVO, CLAIM_DELTA])), 'delta')
+    // #102 RESTATES this arm, which used to assert 'delta': a bystander's DONE never de-owned
+    // alpha (the #12 half, pinned three lines above), so delta's later CLAIM is a Rule-C loser and
+    // the fold keeps alpha. The takeover that IS honest is a claim after the holder's OWN
+    // release - the CLAIM_ALPHA/DONE_ALPHA line above already empties the slot that shape needs.
+    // Leaving 'delta' here would be re-pinning the last-wins semantics this change exists to end.
+    assert.equal(ownerOf(mk([CLAIM_ALPHA, DONE_BRAVO, CLAIM_DELTA])), 'alpha')
     // and a lone DONE invents no owner.
     assert.equal(ownerOf(mk([DONE_BRAVO])), '')
   })

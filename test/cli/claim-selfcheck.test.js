@@ -184,25 +184,39 @@ describe('#52 claim attests that its own CLAIM line resolves', () => {
     assert.deepEqual(posted, [], 'nothing was written')
   })
 
-  it('a rival line AFTER mine stands down, and does not tell me to re-read or re-post', () => {
+  it('#102: a rival line AFTER mine loses the race to my stamp - the claim STANDS, no stand-down prints', () => {
+    // Restated from 'a rival line AFTER mine stands down', which pinned ownership-as-last-word:
+    // its header comment documented the race and the fold disagreeing by design. #102 folds Rule C
+    // into applyMarker (owner || agent), so a late rival CLAIM cannot move the holder and the
+    // post-write attestation now agrees with the pre-write race: earliest wins, I hold, exit 0.
+    // The rival's line still exists on the timeline - it is simply not ownership.
     const w = world({ rival: 'later' })
     const res = w.run(['coord', 'claim', '999999'])
+    assert.equal(res.status, 0, `earliest holder keeps it: ${res.stderr}`)
+    assert.match(res.stdout, /Claimed #999999/)
+    assert.doesNotMatch(
+      res.stderr,
+      /STAND DOWN/,
+      'the late rival no longer displaces me, so there is nothing to stand down from',
+    )
+    assert.doesNotMatch(
+      res.stderr,
+      /last protocol word/,
+      'the last-word path is gone',
+    )
+    assert.doesNotMatch(res.stderr, /RE-READ/)
+    assert.doesNotMatch(res.stderr, /round-trip/)
+    w.done()
+  })
+
+  it('#102 keeps the EARLIER rival arm: losing the race is race.js, and it still refuses before the write', () => {
+    // Non-vacuity pair for the arm above: both cannot be passing because the rival is ignored.
+    // 'earlier' puts bravo's stamp BEFORE mine, so evaluateClaimRace (unchanged by #102) refuses
+    // my write outright - the stand-down prose must still fire there.
+    const w = world({ rival: 'earlier' })
+    const res = w.run(['coord', 'claim', '999999'])
     assert.equal(res.status, 1)
-    assert.match(
-      res.stderr,
-      /last protocol word on the timeline is agent-bravo/,
-    )
-    assert.match(res.stderr, /STAND DOWN per Rule C/)
-    assert.doesNotMatch(
-      res.stderr,
-      /RE-READ/,
-      'my line is not missing, so a re-read is not the remedy',
-    )
-    assert.doesNotMatch(
-      res.stderr,
-      /round-trip/,
-      'my own line resolves fine in isolation',
-    )
+    assert.match(res.stderr, /Lost simultaneous claim race to bravo/)
     w.done()
   })
 
