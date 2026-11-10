@@ -2,6 +2,7 @@ const { checkBacklogAvailability } = require('./preflight')
 const { waitInterruptible } = require('./countdown')
 const { runPiSession } = require('./session')
 const { SessionTracker } = require('./sessionTracker')
+const { adviceProvenanceLine } = require('../cli/runner-currency')
 
 // #90: join the per-PR advice that `preflight` computed - do NOT re-derive causes here, or this renderer
 // drifts from the classifier exactly the way #87's writer and #87's matcher did. Cap the list so a
@@ -26,6 +27,7 @@ const resolveCyclePrompt = ({
   reviewGaps = [],
   closures = null,
   codeCurrency = '',
+  runnerCurrency = null,
 } = {}) => {
   const base = isNewTask
     ? 'Proceed with development using the coordinate skill (finish any in-progress work, or check the board and PRs if ready for a new task).'
@@ -40,6 +42,21 @@ const resolveCyclePrompt = ({
   // talking to it. Empty string means the tree has not moved under this process (or a read failed and
   // the note was suppressed) - silence is only ever produced by those two states, never by guessing.
   if (codeCurrency) withHint = `${withHint}\n${codeCurrency}`
+  // #133: the provenance rides the ADVICE itself, not just the prompt beside it. The reading comes from
+  // the injected seam (a /proc walk plus git), so a fake whose reads throw must yield no line and no
+  // crash - suppressed here means the seam was called and failed, which a pin distinguishes from an
+  // absent seam never being consulted at all. Current boot prints nothing: no noise for no defect.
+  const hasAdvice = Boolean(hint || closures?.note)
+  if (hasAdvice && runnerCurrency) {
+    let read
+    try {
+      read = runnerCurrency.selfRead()
+    } catch {
+      read = undefined
+    }
+    const line = adviceProvenanceLine(read)
+    if (line) withHint = `${withHint}\n${line}`
+  }
   return steering
     ? `${withHint} Explicit steering from user: ${steering}`
     : withHint
@@ -58,6 +75,7 @@ const Runner = ({
   waitImpl = waitInterruptible,
   sessionImpl = runPiSession,
   codeCurrency = null,
+  runnerCurrency = null,
 } = {}) => {
   const runLoop = async ({ maxCycles = Infinity, onCycle } = {}) => {
     if (sessionTracker && project) {
@@ -115,6 +133,7 @@ const Runner = ({
             reviewGaps: availability.reviewGaps || [],
             closures: availability.closures || null,
             codeCurrency: currencyNote,
+            runnerCurrency,
           }),
           continueSession: !isNewTask,
           model,
