@@ -3,6 +3,7 @@ const {
   ownerOf,
   isMine,
   hasClaimBy,
+  completedByOther,
   unresolvedProtocolLines,
 } = require('./owner')
 const { isIssueNumber, pullRequestRefusal } = require('./issueNumber')
@@ -198,6 +199,16 @@ const CoordService = ({
     }
   }
 
+  // #96: the fence's timestamp, formatted once so claim and done cannot drift on how an
+  // override reads. A mock caller may omit `at` entirely and new Date(NaN).toISOString() throws -
+  // a refusal that crashes is a failure path wearing a guard (the #28 lesson, ported).
+  const stampOf = (fence) => {
+    if (Number.isFinite(fence.at))
+      return ` (${new Date(fence.at).toISOString()})`
+    if (fence.at) return ` (${fence.at})`
+    return ''
+  }
+
   const claim = async (number, { plan = '', eta = '' } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
     const notAnIssue = await refuseIfPullRequest('claim', number)
@@ -210,6 +221,25 @@ const CoordService = ({
       return {
         ok: false,
         error: `#${number} is already claimed by ${currentOwner}`,
+      }
+    }
+
+    // #96: the completion fence, and box 3's critical-path claim is this line consuming the
+    // viewIssue ABOVE it - an inside-the-call read, not the board's snapshot, which can be minutes
+    // stale (#1212's DONE was 23 seconds old and already invisible to the ownership check).
+    // It sits after the held-by check because a live rival CLAIM has the more specific story, and
+    // before the scope gate because refusing here needs no collision math and writes nothing.
+    const fence = completedByOther(issue.comments, cleanCurrent)
+    if (fence) {
+      return {
+        ok: false,
+        error:
+          `#${number} carries an unretracted **DONE** by agent-${fence.agent}${stampOf(fence)} - ` +
+          `the work is recorded complete, and 'unclaimed' on the board after a self-posted DONE is ` +
+          `ownerOf's documented blind spot, not an opening. If the completion is wrong, ask the ` +
+          `completer to RELEASE it first (their line, or an unattributed one, is the only retraction); ` +
+          `claim has no --force here because forcing INTO someone's completed work is how #1212's ` +
+          `false lineage was minted. Nothing was written.`,
       }
     }
 
@@ -286,6 +316,22 @@ const CoordService = ({
       return {
         ok: false,
         error: `Lost simultaneous claim race to ${raceResult.earlierAgent}`,
+      }
+    }
+
+    // #96: the post-write half of the critical path. A DONE that landed between the pre-write read
+    // and this re-read is the same #1212 window measured a second later, and the race adjudicator
+    // cannot see it (a DONE is not a claim). Mirror the race-loss shape exactly: auto-RELEASE my
+    // just-written line and refuse, so a claim that raced a completion never stands.
+    const postFence = completedByOther(refreshed.comments, cleanCurrent)
+    if (postFence) {
+      await github.commentIssue(
+        number,
+        `**RELEASE** | agent: agent-${cleanCurrent} | reason: agent-${postFence.agent}${stampOf(postFence)} completed this before my claim landed (#96)`,
+      )
+      return {
+        ok: false,
+        error: `#${number} was recorded done by agent-${postFence.agent}${stampOf(postFence)} between the read and the write - my CLAIM was auto-released, nothing is held, and the completion stands.`,
       }
     }
 
@@ -420,6 +466,25 @@ const CoordService = ({
     const issue = await github.viewIssue(number)
     if (!issue) return { ok: false, error: `Issue #${number} not found` }
 
+    // #96: the completion fence, FIRST among the pre-write checks. It precedes #28's ownership
+    // branch on purpose: pitcairn #1212's second close was signed by an agent whose claim the tool
+    // had itself accepted seconds after the completion landed, so `allowed` was TRUE and only the
+    // fence could refuse - a check ordered behind a passing gate never runs. #94 landed first, so
+    // this is the forward-port its sequencing line predicted: built inside done's pre-write
+    // cluster, not beside it.
+    const fence = completedByOther(issue.comments, cleanCurrent)
+    if (fence && !force) {
+      return {
+        ok: false,
+        error:
+          `#${number} was recorded done by agent-${fence.agent}${stampOf(fence)} with no RELEASE after it - ` +
+          `closing would overwrite the first attestation with yours, and #1212 measured what that does: ` +
+          `the second DONE misattributed the shipped fix to a different commit for ~15 minutes. ` +
+          `Credit-only path: post a comment saying what you verified, do not close. If the completer ` +
+          `forgot to close at all, re-run with --force and the override will be visible in your DONE line.`,
+      }
+    }
+
     const owner = cleanAgent(ownerOf(issue))
     // two states permit a close without the override: you hold it now, or nobody holds it and you
     // signed its CLAIM at some point. Everything else is someone else's work or unowned work you
@@ -464,9 +529,16 @@ const CoordService = ({
     const tickNote = closingUnattested
       ? ` | ${unattestedNote(ticks)} | ${force ? 'forced over unticked boxes' : 'evidence in message'}`
       : ''
+    // #96: the other override deserves the same treatment - "who else's completion did this close
+    // land on top of" is exactly the line an auditor greps for after a false-lineage report.
+    const fenceNote =
+      fence && force
+        ? ` | forced over unretracted DONE by agent-${fence.agent}${stampOf(fence)}`
+        : ''
     const commentBody =
       `**DONE** | agent: agent-${cleanCurrent} | at: ${now()}` +
       tickNote +
+      fenceNote +
       (pr ? ` | pr: #${pr}` : '') +
       (text ? `\n\n${text}` : '')
     await github.commentIssue(number, commentBody)
@@ -490,6 +562,9 @@ const CoordService = ({
       // which path was taken is part of the record, not a private boolean: a forced close on a
       // peer's issue is the event an auditor looks for afterwards
       forced: force && !allowed,
+      // #96: one field over again - the forced-over-a-completion case is the rarer and worse
+      // variant, and a later reader greps for the NAME, not a boolean that has forgotten whose.
+      forcedOverDone: fence && force ? fence.agent : '',
       // #94: same reasoning one field over - the count is what a later reader greps for
       unattested: closingUnattested ? ticks.unticked : 0,
     }
