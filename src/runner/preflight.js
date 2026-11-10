@@ -180,12 +180,20 @@ const prReviewGap = (pr, agent) => {
 // read nothing, and this fleet has been burned by that shape more than once, including in a `jq` wrap
 // that made a four-comment thread read as one.
 const UNATTESTED_WINDOW_HOURS = 6
-// No cap of our own: the read inherits `ISSUE_PAGE_CEILING` (500 on main, measured), because asking for a
-// smaller number is not a smaller read here - `listIssues` treats rows-at-the-requested-limit as TRUNCATED
-// and refuses. A repo whose whole closed set is above the ceiling therefore reports UNKNOWN rather than a
-// confident zero, which is the honest direction.
+// #107: the read is bounded SERVER-side, because --limit cannot express a window and a repo whose whole
+// closed set sits above `ISSUE_PAGE_CEILING` (pitcairn measured 553 closed at filing against a 500 cap)
+// refused the sweep outright - so the guard built to catch unattested closes was blind on the one repo that
+// has them. The floor is floored to a UTC DAY, which makes it always a superset of the window: the exact
+// cutoff filter below still decides membership, and a day boundary is the form gh's closed:>= parses
+// reliably. Raising the ceiling instead is the same cliff with a longer runway, which is why the constant is
+// untouched and the at-cap refusal is kept: a truncated read is still UNKNOWN, and UNKNOWN is still honest.
 const CLOSE_SCAN_LIMIT = null
 const MAX_CLOSURE_LINES = 3
+
+// The UTC-day floor of the window, as a gh search qualifier. Day granularity is deliberate: it is a
+// superset, so no in-window close can be lost to rounding, and the client-side exact filter still runs.
+const windowSearch = (nowMs, windowHours) =>
+  `closed:>=${new Date(nowMs - windowHours * 60 * 60 * 1000).toISOString().slice(0, 10)}`
 
 const scanUnattestedClosures = async ({
   github,
@@ -193,9 +201,15 @@ const scanUnattestedClosures = async ({
   windowHours = UNATTESTED_WINDOW_HOURS,
   limit = CLOSE_SCAN_LIMIT,
 } = {}) => {
-  // an explicit `limit` of null lets listIssues apply its own ceiling; the call must not forward the key
+  // an explicit `limit` of null lets listIssues apply its own ceiling; the call must not forward that key.
+  // `search` is ALWAYS forwarded: it is the reason the read is small enough to be complete at all, and the
+  // pin that matters is this call arriving with a value starting `closed:>=` - a bare ceiling raise leaves
+  // this arm red, which is the point (a green there would say nothing about the fix).
+  const search = windowSearch(now(), windowHours)
   const options =
-    limit === null ? { state: 'closed' } : { state: 'closed', limit }
+    limit === null
+      ? { state: 'closed', search }
+      : { state: 'closed', search, limit }
 
   let closed
   try {
@@ -211,9 +225,8 @@ const scanUnattestedClosures = async ({
       note:
         'unattested-closure scan of the CLOSED axis: the read FAILED ' +
         `(${String(err.message || err).split('\n')[0]}) - UNKNOWN, not clean. ` +
-        'Note the shared ceiling message speaks of the open set and the scope gate; this call is the ' +
-        'closed set, so an at-cap repo needs a bounded server-side read (or a raised ceiling) before ' +
-        'this scan can sweep it at all.',
+        `the sweep asked for ${search}; an at-cap result here means the predicate was ignored or the ` +
+        'window itself exceeds the ceiling, which is a different failure than a repo too big to read.',
     }
   }
   const rows = closed || []

@@ -152,3 +152,67 @@ describe('listIssues distinguishes an empty set from a failed read (#85)', () =>
     )
   })
 })
+
+// #107: the closed-axis sweep died on this cap because `--limit` cannot express a window. Two halves of one
+// guard, both pinned against the execFile seam: the predicate travels when a caller names one, and the token
+// is ABSENT - not empty, not merely falsy - when it does not. The negative half is the expensive one: a
+// `--search` that leaked into the OPEN-axis read would silently narrow the collision set that `claim` and
+// `board` depend on, which is a false "no collision" - and every positive-only pin stays green while it does.
+it('--search travels when the caller names a predicate, on the axis it was asked for', async () => {
+  const { issues, argv } = await call(rows(2), {
+    state: 'closed',
+    search: 'closed:>=2026-11-09',
+  })
+  const list = argv[argv.length - 1]
+  assert.ok(
+    list.includes('--search'),
+    `no --search reached gh: ${list.join(' ')}`,
+  )
+  assert.equal(list[list.indexOf('--search') + 1], 'closed:>=2026-11-09')
+  assert.equal(list[list.indexOf('--state') + 1], 'closed')
+  assert.equal(issues.length, 2)
+})
+
+it('no --search token appears when the caller names none - absent, never empty', async () => {
+  for (const options of [
+    undefined,
+    {},
+    { state: 'open' },
+    { state: 'closed' },
+  ]) {
+    const { argv } = await call(rows(1), options)
+    const list = argv[argv.length - 1]
+    assert.ok(
+      !list.includes('--search'),
+      `--search leaked into the ${JSON.stringify(options)} read, narrowing a set the gate depends on`,
+    )
+    assert.ok(
+      !list.includes(''),
+      `an empty argument reached gh for ${JSON.stringify(options)}`,
+    )
+  }
+})
+
+it('an empty-string search is not forwarded either: gh reads it as match-nothing', async () => {
+  const { argv } = await call(rows(1), { state: 'closed', search: '' })
+  const list = argv[argv.length - 1]
+  assert.ok(!list.includes('--search'), 'an empty --search was forwarded')
+})
+
+it('the at-cap refusal names the axis it was asked for, not the one the gate cares about', async () => {
+  const closed = await call(rows(3), { state: 'closed', limit: 3 })
+  assert.ok(closed.error, 'expected a throw at the cap on the closed axis')
+  assert.match(closed.error.message, /on the closed axis/)
+  assert.match(closed.error.message, /CLOSED set is TRUNCATED/)
+  assert.match(closed.error.message, /options\.search/)
+  assert.ok(
+    !closed.error.message.includes('scope gate'),
+    'the closed-axis refusal still accuses the claim gate, which is what sent an agent hunting the wrong ' +
+      'axis for a repo with four open issues',
+  )
+
+  const open = await call(rows(3), { state: 'open', limit: 3 })
+  assert.match(open.error.message, /on the open axis/)
+  assert.match(open.error.message, /OPEN set is TRUNCATED/)
+  assert.match(open.error.message, /scope gate/)
+})
