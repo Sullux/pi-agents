@@ -94,6 +94,27 @@ const pullRequestRefusal = (sub, number, kind = {}) => {
   )
 }
 
+// #106: the STATE half of #30's KIND half, born from pitcairn#1218. The issue was auto-closed by
+// PR #1225's Closes trailer at 03:27:28Z; at 03:28:21Z `page coord review 1218 --pr 1225` rc=0'd,
+// printed `Moved #1218 to in-review`, posted a **REVIEW** onto the CLOSED issue, and STAMPED
+// `status:in-review` back onto an artifact already COMPLETED - putting finished work on the board
+// as live. The kind guard shipped for exactly that class could not see it, because the artifact
+// was an issue; it just was not an OPEN one. All five mutating verbs refuse CLOSED uniformly and
+// `--force` does NOT override: a supervisor who wants a closed artifact restated reopens it
+// deliberately, so board and timeline agree on what work is live. Post-merge attestation has its
+// own surface - the PR thread - which is where this refusal sends the reader.
+const closedRefusal = (sub, number, kind = {}) => {
+  const reason = `${kind.stateReason || ''}`.trim()
+  return (
+    `Error: coord ${sub}: #${number} is CLOSED${reason ? ` (${reason})` : ''}, not open - ` +
+    'coord verbs address the live board, and a protocol line written onto a closed artifact puts ' +
+    'finished work back on it as live. Nothing was written. ' +
+    'If it merged, attest the shipped tree with `gh pr comment` on the PR thread; if you meant to ' +
+    'resume it, run `gh issue reopen` deliberately and re-run the verb. ' +
+    `Usage: page coord ${USAGE[sub] || sub}.`
+  )
+}
+
 module.exports = {
   USAGE,
   isIssueNumber,
@@ -101,4 +122,5 @@ module.exports = {
   requireMessage,
   linkedIssues,
   pullRequestRefusal,
+  closedRefusal,
 }
