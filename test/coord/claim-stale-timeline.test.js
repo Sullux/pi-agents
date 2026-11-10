@@ -116,6 +116,44 @@ describe('completedByOther (the #96 fence predicate)', () => {
     )
   })
 
+  it('EQUAL stamps fall back to line order, so the fence cannot disagree with the fold (#100 x #102 seam)', () => {
+    // Two tool writes inside one millisecond are not hypothetical: the #102 fixture bytes freeze a
+    // 12-second pair, and `at:` is emitted by `now()` at ms resolution, so a same-ms race is the
+    // shape that repeats. Before this arm the fence compared `<` only, so BOTH orders refused my
+    // close while `applyMarker` - earliest CLAIM wins, array order deciding the tie - named me the
+    // holder in one of them. One timeline, two answers, same file: the recorded "a tool can both
+    // take a claim and refuse it" divergence, arriving inside one module.
+    const tie = 1700000003000
+    assert.equal(
+      completedByOther(
+        asComments([claimLine('b', tie), doneLine('a', tie)]),
+        'b',
+      ),
+      null,
+      'my claim is the earlier LINE under the same stamp, so Rule C makes me the holder and the fence must not overrule it',
+    )
+    assert.equal(
+      completedByOther(
+        asComments([doneLine('a', tie), claimLine('b', tie)]),
+        'b',
+      )?.agent,
+      'a',
+      'reversed order, same stamps: my claim arrived after the completion, so the fence stands - this is the arm that makes the tie-break a rule rather than a coincidence',
+    )
+    // and the fold agrees in both directions, which is the whole point of the seam
+    const { ownerOf } = require('../../src/coord/owner')
+    assert.equal(
+      ownerOf({ comments: [{ body: claimLine('b', tie) }, { body: doneLine('a', tie) }] }),
+      'b',
+      'earliest CLAIM wins the holder slot under a tie',
+    )
+    assert.equal(
+      ownerOf({ comments: [{ body: doneLine('a', tie) }, { body: claimLine('b', tie) }] }),
+      'b',
+      'the fold is order-blind for a CLAIM that is the only claim, so ownership and the fence can only agree by the fence deferring to line order',
+    )
+  })
+
   it('reads `at` from the body field, falls back to created_at, and fences with neither', () => {
     const fromField = completedByOther(
       [{ body: doneLine('a', 1600000000000), created_at: 'ignored' }],

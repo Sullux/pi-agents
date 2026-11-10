@@ -155,7 +155,16 @@ const completedByOther = (comments = [], agent = '') => {
   const clean = cleanAgent(agent)
   let fence = null
   let myClaimAt = null
+  // #96 + #102, the seam bravo named on PR #100: the fence compared stamps with `<`, so a pair
+  // carrying the SAME `at:` (two tool writes inside one millisecond, which the #102 fixture bytes
+  // reproduce) left `protectedByPriorClaim` false and refused MY close while `applyMarker` - which
+  // resolves the same tie by ARRAY ORDER, earliest CLAIM wins - still projected me as the holder.
+  // One timeline, two answers, in the same file. Rule C's tie-break is comment order, so the fence
+  // now defers to it on equal stamps: an earlier line protects, a later one does not.
+  let myClaimIdx = -1
+  let idx = -1
   for (const c of comments || []) {
+    idx++
     const body = c.body?.trim() || ''
     const kind = markerOf(body)
     const who = agentOf(body)
@@ -164,12 +173,16 @@ const completedByOther = (comments = [], agent = '') => {
       return m ? Number(m[1]) : (c.created_at ?? null)
     }
     if (kind === 'CLAIM') {
-      if (clean && who === clean) myClaimAt = stamped()
+      if (clean && who === clean) {
+        myClaimAt = stamped()
+        myClaimIdx = idx
+      }
       continue
     }
     if (kind === 'RELEASE') {
       if (!who || who === clean) {
         myClaimAt = null
+        myClaimIdx = -1
         if (fence?.protectedByPriorClaim) {
           fence = { ...fence, protectedByPriorClaim: false }
         }
@@ -180,11 +193,12 @@ const completedByOther = (comments = [], agent = '') => {
     if (kind === 'DONE' && who) {
       const at = stamped()
       const bothStamps = myClaimAt != null && at != null
+      const sameStampTie = myClaimAt != null && myClaimAt === at && myClaimIdx < idx
       fence = {
         agent: who,
         at,
         protectedByPriorClaim:
-          myClaimAt != null && (!bothStamps || myClaimAt < at),
+          myClaimAt != null && (!bothStamps || myClaimAt < at || sameStampTie),
       }
     }
   }
