@@ -156,22 +156,80 @@ const GitHubClient = ({
     return result?.toString()?.trim() || ''
   }
 
-  // Returns `{ isPullRequest, state, stateReason, title, body }` for the number, or `undefined`
-  // when gh errors or the
-  // payload will not parse - an unresolvable number is NOT reported as a pull request, because the
-  // verbs already fail loudly on their own read of it and this guard's job is only to stop a write
-  // that would land on the wrong kind of artifact.
+  // #126: `gh api` (REST) answers `closed` while `gh issue view --json state` (GraphQL) answers
+  // `CLOSED`, and the one consumer of this method - `refuseIfNotOpen` in `src/coord/index.js` -
+  // compares `kind?.state === 'CLOSED'`. Measured at `4eccb91`: `issueKind(94)` returned
+  // `{"isPullRequest":false,"state":"closed","stateReason":"completed"}` and the guard answered "not
+  // an issue-shaped problem" on a CLOSED target, which is how foxtrot's REVIEW (6759789295) and STATUS
+  // (6759802769) are sitting on closed pi#94 right now with rc 0. Normalized here rather than at the
+  // compare, because this method is the thing that mis-stated its own contract; every consumer then
+  // inherits a working check. `undefined` on a failed read is deliberately UNCHANGED - that is #118's
+  // fail-open half, which needs `src/coord/index.js` (alpha's #124 is editing it now) plus delta's
+  // #121 fixture re-pin, and making this throw would redden doubles that legitimately omit `state`.
+  const upper = (value) =>
+    typeof value === 'string' ? value.toUpperCase() : value
+
   const issueKind = async (number) => {
     try {
-      return JSON.parse(
+      const kind = JSON.parse(
         await ghApi(
           `repos/${activeRepo}/issues/${number}`,
           '{isPullRequest: (.pull_request != null), state: .state, stateReason: .state_reason, title, body}',
         ),
       )
+      return {
+        ...kind,
+        state: upper(kind.state),
+        stateReason: upper(kind.stateReason),
+      }
     } catch {
       return undefined
     }
+  }
+
+  // #123 is blocked on exactly this read: to tell "nobody attested anything" from "the ticks live in
+  // the closing PR's body", it needs the issue's own timeline, and `viewIssue` returns only
+  // body/comments/labels/number/title. Bounded per CALL, not per sweep - the caller caps how many
+  // issues it asks about (`MAX_CLOSURE_LINES`), which is how #110's rule survives: pitcairn holds
+  // 1236 closed issues against `ISSUE_PAGE_CEILING = 500`, so enumerating the closed population to
+  // find a closing PR is a truncated read that would report itself as a result. Pagination stays
+  // inside one issue, and events are FLATTENED rather than filtered per page, because
+  // `gh api --paginate -q '.[-1]'` evaluates its filter on every page and returns page one's tail -
+  // the recorded false-negative this method must not reintroduce.
+  const TIMELINE_EVENT_CEILING = 2000
+
+  const issueTimeline = async (number) => {
+    if (!activeRepo) throw noRepoError()
+    const result = execFile(
+      'gh',
+      [
+        'api',
+        `repos/${activeRepo}/issues/${number}/timeline`,
+        '--paginate',
+        '--jq',
+        '.[]',
+      ],
+      { cwd, encoding: 'utf8', maxBuffer: GH_MAX_BUFFER },
+    )
+    const text = result?.toString()?.trim() || ''
+    if (!text) return []
+    const lines = text.split('\n')
+    if (lines.length > TIMELINE_EVENT_CEILING)
+      throw new Error(
+        `issueTimeline(#${number}) returned ${lines.length} events, above the ${TIMELINE_EVENT_CEILING} per-issue ceiling. This read is meant to be bounded by the caller's flagged-row count, not to stream a hub; refusing rather than truncating, because a short timeline is a confident wrong answer about what evidence exists.`,
+      )
+    // One unparseable line means the stream was not what we asked for (a half-written page, or a jq
+    // shape that emitted scalars). Returning [] there would read as "this closure has no evidence",
+    // which is the exact false sentence #123 exists to stop the sweep printing.
+    return lines.map((line, index) => {
+      try {
+        return JSON.parse(line)
+      } catch {
+        throw new Error(
+          `issueTimeline(#${number}) event ${index + 1} of ${lines.length} is not JSON (${line.slice(0, 80)}) - refusing to read a malformed timeline as an empty one.`,
+        )
+      }
+    })
   }
 
   const listIssues = async (options = {}) => {
@@ -382,6 +440,7 @@ const GitHubClient = ({
     repo: activeRepo,
     runGh,
     issueKind,
+    issueTimeline,
     listIssues,
     listLabels,
     viewIssue,

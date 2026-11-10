@@ -63,10 +63,14 @@ describe('GitHubClient', () => {
     let capturedArgs = []
     const mockExec = (cmd, args) => {
       capturedArgs = [cmd, ...args]
+      // #126: this fixture used to answer `state: 'CLOSED'` - which is what GraphQL returns and what
+      // REST does NOT. The fiction is exactly why the inert compare survived review: the mock carried
+      // by hand the value the guard compares, while `gh api` emits it lowercase. Now sends the real
+      // bytes, so this arm guards the normalization as well as the jq projection it was written for.
       return JSON.stringify({
         isPullRequest: false,
-        state: 'CLOSED',
-        stateReason: 'COMPLETED',
+        state: 'closed',
+        stateReason: 'completed',
         title: 'an issue',
         body: '',
       })
@@ -170,6 +174,119 @@ describe('gh output buffering', () => {
       out.length,
       HUB_PAYLOAD_BYTES,
       'the full payload must arrive, not a truncated prefix',
+    )
+  })
+})
+
+describe('#126 kind casing and the per-issue timeline read', () => {
+  const clientFor = (reply) =>
+    GitHubClient({
+      repo: 'Sullux/pi-agents',
+      execFile: () => reply,
+    })
+
+  it('issueKind answers in ONE casing whatever the transport sends', async () => {
+    // REST says `closed`, GraphQL says `CLOSED`. The client is the thing that promised a contract,
+    // so the normalization belongs here and every consumer inherits a working compare.
+    for (const wire of ['closed', 'CLOSED', 'Closed']) {
+      const client = clientFor(
+        JSON.stringify({
+          isPullRequest: false,
+          state: wire,
+          stateReason: 'completed',
+        }),
+      )
+      const kind = await client.issueKind(94)
+      assert.equal(
+        kind.state,
+        'CLOSED',
+        `wire value ${JSON.stringify(wire)} must reach the guard as CLOSED`,
+      )
+      assert.equal(
+        kind.stateReason,
+        'COMPLETED',
+        'and the reason field likewise',
+      )
+    }
+  })
+
+  it('the exact compare src/coord refuses on now matches a REST-shaped reply', async () => {
+    // This is the arm that would have been RED before the fix. Written as the consumer writes it -
+    // `kind?.state === 'CLOSED'` is the only CLOSED check in src/coord/index.js - so a future
+    // change to either side that breaks the guard reddens here rather than landing inert.
+    const kind = await clientFor(
+      JSON.stringify({
+        isPullRequest: false,
+        state: 'closed',
+        stateReason: 'completed',
+        title: 'an issue',
+        body: '',
+      }),
+    ).issueKind(94)
+    assert.equal(
+      kind?.state === 'CLOSED',
+      true,
+      'refuseIfNotOpen would have allowed a write onto a CLOSED target',
+    )
+  })
+
+  it('issueKind still answers undefined when the read fails - #118 owns that half', async () => {
+    // Deliberate: the fail-open path is #118's, and it needs src/coord/index.js (alpha's #124 is
+    // editing it) plus the fixture re-pin in delta's #121. Pinned unchanged so nobody reads my
+    // casing edit as that fix, and so a later throw-on-error change reddens HERE first.
+    const client = GitHubClient({
+      repo: 'Sullux/pi-agents',
+      execFile: () => {
+        throw new Error('gh: HTTP 502')
+      },
+    })
+    assert.equal(await client.issueKind(94), undefined)
+  })
+
+  it('issueTimeline is exported, paginates inside one issue, and flattens', async () => {
+    const seen = []
+    const client = GitHubClient({
+      repo: 'Sullux/pi-agents',
+      execFile: (cmd, args) => {
+        seen.push([cmd, ...args].join(' '))
+        return [
+          JSON.stringify({ event: 'commented', created_at: 'a' }),
+          JSON.stringify({ event: 'closed', created_at: 'b', commit_id: null }),
+        ].join('\n')
+      },
+    })
+    assert.equal(typeof client.issueTimeline, 'function')
+    const events = await client.issueTimeline(94)
+    assert.equal(events.length, 2, 'two streamed objects are two events')
+    assert.deepEqual(
+      events.map((e) => e.event),
+      ['commented', 'closed'],
+    )
+    assert.match(seen[0], /repos\/Sullux\/pi-agents\/issues\/94\/timeline/)
+    assert.match(seen[0], /--paginate/)
+    // `.[]` not `.[-1]`: a per-page filter returns page one's tail and reads as "nothing happened"
+    // (the recorded gh --paginate false negative). Pin the shape that flattens.
+    assert.match(seen[0], /--jq \.\[\]$/)
+  })
+
+  it('issueTimeline refuses a malformed event instead of reporting an empty timeline', async () => {
+    const client = clientFor('{"event":"labeled"}\nnot json at all')
+    await assert.rejects(
+      () => client.issueTimeline(94),
+      /event 2 of 2 is not JSON/,
+    )
+  })
+
+  it('issueTimeline treats a truly empty timeline as a result, not a failure', async () => {
+    assert.deepEqual(await clientFor('').issueTimeline(1), [])
+  })
+
+  it('issueTimeline caps its own per-issue fan-out, loudly', async () => {
+    const one = JSON.stringify({ event: 'subscribed' })
+    const client = clientFor(Array(2001).fill(one).join('\n'))
+    await assert.rejects(
+      () => client.issueTimeline(94),
+      /above the 2000 per-issue ceiling/,
     )
   })
 })
