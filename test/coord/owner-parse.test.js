@@ -200,6 +200,21 @@ describe('owner.js: hasClaimBy sees the author for every shape ownerOf resolves 
 // two, alpha's own release then matched poster == holder and cleared the slot, and the issue
 // projected OWNERLESS over an uncontested earliest claim. `owner || agent` ends that: a late
 // CLAIM cannot displace, and a concession can no longer delete a holder it never legitimately had.
+//
+// ONE WARNING ABOUT THESE BYTES, for whoever greps the advisory sentence and lands here. The line
+// `- #1213 (charlie) on AGENTS.md - rebase owed after it merges (status:in-review)` is FROZEN
+// historical payload - it is what pitcairn#1218's timeline actually carried on 2026-11-10, and
+// rewriting it would destroy the point of pinning real bytes. It is NOT current markup, and the
+// phrase lives in pi-agents in TWO roles that a cross-repo grep will not tell apart:
+//   1. `src/coord/scope.js` still GENERATES it, for an overlap with an UNCLAIMED in-review issue
+//      (the `#52` advisory, "rebase owed after it merges");
+//   2. this fixture QUOTES it, as delivered to pitcairn#1218 from an older tip.
+// Pitcairn's own renderers that printed the "owed after it merges" promise were deleted by pitcairn
+// #1213, because for an UNCLAIMED neighbour the advice was wrong at generation time - so a reader
+// who finds this string in pi-agents and concludes pitcairn regressed has matched a quote, not a
+// renderer. The shape that distinguishes them: a renderer builds the sentence from `statusOf` at
+// call time, a fixture pastes it. If you need to know whether the sentence is LIVE, grep
+// `src/coord/scope.js`, not `test/`.
 
 const CL_1218_BRAVO = `**CLAIM** | agent: agent-bravo | human: @Sullux | at: 1794269072270
 
