@@ -320,9 +320,19 @@ const GitHubClient = ({
           : `The ${String(state).toUpperCase()}-issue set is UNKNOWN, not empty: state:'${state}' spans ` +
             'BOTH axes, so a silent [] would empty the claim gate and read a failed closure sweep as ' +
             "zero unattested at once. Retry on ONE axis ('open' or 'closed'); this refuses instead."
-    const unreadable = (detail) =>
+    // This site is reached by three different callers depending on the axis: the claim gate asks for
+    // `open`, the closure sweep for `closed`, and a state:'all' read for both - so the actor has to be
+    // derived from the axis here rather than hardcoded, or one of the three is being lied about.
+    const siteOne =
+      state === 'open'
+        ? ['the claim gate', 'a target issue against the live collision set']
+        : state === 'closed'
+          ? ['the unattested-closure sweep', 'zero unattested at this repo']
+          : ['a state:all reader', 'either axis on its own']
+    const unreadable = (detail, actor, target) =>
       new Error(
         `coord: gh issue list returned unreadable output for ${activeRepo || 'the resolved repo'} on the ${state} axis - ${detail}. ` +
+          `Caller: ${actor}, which cannot check ${target}. ` +
           axisCost +
           codeWitness(),
       )
@@ -331,6 +341,8 @@ const GitHubClient = ({
         text
           ? `readout is not JSON: starts with ${JSON.stringify(text.slice(0, 2))} across ${text.length} bytes`
           : 'empty stdout',
+        siteOne[0],
+        siteOne[1],
       )
     }
     let parsed
@@ -339,10 +351,16 @@ const GitHubClient = ({
     } catch (err) {
       throw unreadable(
         `JSON parse failed (${errorCause(err)}) after ${text.length} bytes`,
+        'the unattested-closure sweep',
+        'its carrier issue',
       )
     }
     if (!Array.isArray(parsed))
-      throw unreadable(`parsed a ${typeof parsed}, not an array`)
+      throw unreadable(
+        `parsed a ${typeof parsed}, not an array`,
+        `the caller asking for state:${state}`,
+        'its list read',
+      )
     // Exactly-at-cap is the only truncation signal a list can give, so it is treated as one and named
     // with its remedy. Below the cap the set is complete and says nothing - tagging every call would
     // cry wolf the way the `withFullTimelines` header warns about for the comment axis.

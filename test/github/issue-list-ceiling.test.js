@@ -509,6 +509,31 @@ for (const state of ['open', 'closed', 'all']) {
         /\[code @ b4a725d\]$/,
         `the unreadable refusal carries no code witness, unlike its at-cap sibling: ${error.message}`,
       )
+      // The actor half, and it is per-shape because one message site serves three callers: the
+      // truncated-JSON shape falls through to the parse-failure site (the sweep's), while every other
+      // degraded read hits the axis-derived site. Without this pairing an empty or wrong actor still
+      // satisfies every assertion above, which is exactly how #138 shipped axis text and no actor.
+      const actorByAxis = {
+        open: [
+          'the claim gate',
+          'a target issue against the live collision set',
+        ],
+        closed: [
+          'the unattested-closure sweep',
+          'zero unattested at this repo',
+        ],
+        all: ['a state:all reader', 'either axis on its own'],
+      }
+      const want =
+        reply === '[{"number":1}'
+          ? ['the unattested-closure sweep', 'its carrier issue']
+          : actorByAxis[state]
+      assert.ok(
+        error.message.includes(
+          `Caller: ${want[0]}, which cannot check ${want[1]}.`,
+        ),
+        `the ${state}-axis (${name}) refusal names the wrong caller: ${error.message}`,
+      )
       if (state === 'open') {
         assert.match(
           error.message,
