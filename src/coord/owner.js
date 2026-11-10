@@ -230,7 +230,8 @@ const completedByOther = (comments = [], agent = '') => {
     if (kind === 'DONE' && who) {
       const at = stamped()
       const bothStamps = myClaimAt != null && at != null
-      const sameStampTie = myClaimAt != null && myClaimAt === at && myClaimIdx < idx
+      const sameStampTie =
+        myClaimAt != null && myClaimAt === at && myClaimIdx < idx
       fence = {
         agent: who,
         at,

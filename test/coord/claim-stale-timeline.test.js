@@ -209,12 +209,16 @@ describe('completedByOther (the #96 fence predicate)', () => {
     // and the fold agrees in both directions, which is the whole point of the seam
     const { ownerOf } = require('../../src/coord/owner')
     assert.equal(
-      ownerOf({ comments: [{ body: claimLine('b', tie) }, { body: doneLine('a', tie) }] }),
+      ownerOf({
+        comments: [{ body: claimLine('b', tie) }, { body: doneLine('a', tie) }],
+      }),
       'b',
       'earliest CLAIM wins the holder slot under a tie',
     )
     assert.equal(
-      ownerOf({ comments: [{ body: doneLine('a', tie) }, { body: claimLine('b', tie) }] }),
+      ownerOf({
+        comments: [{ body: doneLine('a', tie) }, { body: claimLine('b', tie) }],
+      }),
       'b',
       'the fold is order-blind for a CLAIM that is the only claim, so ownership and the fence can only agree by the fence deferring to line order',
     )
