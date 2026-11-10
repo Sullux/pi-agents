@@ -19,6 +19,24 @@ const NODE_DEFAULT_MAX_BUFFER = 1024 * 1024
 // lesson is #4's ENOBUFS, which at least THREW: a short list returns status 0 and a plausible board.
 const ISSUE_PAGE_CEILING = 500
 
+// #118: a failed kind/state read used to answer `undefined`, and `undefined` is indistinguishable
+// from "open" in the only compare its callers write (`kind?.state === 'CLOSED'`). So a `gh` blip
+// re-opened exactly the accident #106 closed: pitcairn#1218 measured a `review` verb rc=0 onto an
+// issue CLOSED 53 seconds earlier, while `--force` refuses the SAME write. A transport failure is
+// therefore not a value any caller may mistake for a payload - it is a thrown, tagged error, the
+// same shape `viewPr` above already uses for unparsable JSON.
+const KIND_READ_FAILURE = 'coordIssueKindReadFailure'
+
+const kindReadFailure = (number, cause) =>
+  Object.assign(
+    new Error(
+      `coord: the kind/state read for #${number} failed (${String(cause?.message ?? cause)})`,
+    ),
+    { [KIND_READ_FAILURE]: true, number, reason: String(cause?.message ?? cause) },
+  )
+
+const isKindReadFailure = (error) => error?.[KIND_READ_FAILURE] === true
+
 const resolveRepoFromRemote = (remoteUrl = '') => {
   const cleaned = remoteUrl.trim().replace(/\.git$/, '')
   const sshMatch = cleaned.match(/github\.com[:/]([^/]+\/[^/]+)/)
@@ -194,21 +212,30 @@ const GitHubClient = ({
   const upper = (value) =>
     typeof value === 'string' ? value.toUpperCase() : value
 
+  // #118: TWO failures, deliberately separated. A transport error or unparsable stdout THROWS
+  // (see `kindReadFailure`); an object that genuinely carries no `state` answers with `state:
+  // undefined` and is still readable. Callers must now opt into the healthy case by name, because
+  // the old `catch { return undefined }` made the broken read look like the healthy one.
   const issueKind = async (number) => {
+    let payload
     try {
-      const kind = JSON.parse(
-        await ghApi(
-          `repos/${activeRepo}/issues/${number}`,
-          '{isPullRequest: (.pull_request != null), state: .state, stateReason: .state_reason, title, body}',
-        ),
+      payload = await ghApi(
+        `repos/${activeRepo}/issues/${number}`,
+        '{isPullRequest: (.pull_request != null), state: .state, stateReason: .state_reason, title, body}',
       )
-      return {
-        ...kind,
-        state: upper(kind.state),
-        stateReason: upper(kind.stateReason),
-      }
-    } catch {
-      return undefined
+    } catch (error) {
+      throw kindReadFailure(number, error)
+    }
+    let kind
+    try {
+      kind = JSON.parse(payload)
+    } catch (error) {
+      throw kindReadFailure(number, error)
+    }
+    return {
+      ...kind,
+      state: upper(kind.state),
+      stateReason: upper(kind.stateReason),
     }
   }
 
@@ -506,6 +533,9 @@ const GitHubClient = ({
 module.exports = {
   resolveRepoFromRemote,
   GitHubClient,
+  kindReadFailure,
+  isKindReadFailure,
+  KIND_READ_FAILURE,
   GH_MAX_BUFFER,
   NODE_DEFAULT_MAX_BUFFER,
   ISSUE_PAGE_CEILING,
