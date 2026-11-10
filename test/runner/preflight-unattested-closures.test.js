@@ -190,3 +190,94 @@ it('the sweep really reaches gh with the predicate: an argv pin through the exec
   )
   assert.ok(list.includes('closed'), 'the read lost its state')
 })
+
+// #114: #99 ratified that box-less closures are not gaps, and that decision is preserved exactly here -
+// `unattested` membership does not move. What changed is the silence around it: the report used to say
+// "3 unattested" about a 15-closure window in which 6 were never eligible to appear, and a reader could
+// not tell an empty window from a dropped one.
+const shapes = {
+  unattested: body(0, 8),
+  attested: body(5, 0),
+  numbered: '## Done when\n1. first\n2. second\n',
+  plainBullets: '## Done when\n- first\n- second\n',
+  noWhenSection: '## Goal\nnothing that reads as a gate\n',
+  unreadableHeading: '## Done-when\n- [ ] a\n- [ ] b\n',
+}
+
+const rowsFor = (keys) =>
+  keys.map((k, i) => ({
+    number: 700 + i,
+    closedAt: new Date(FIXED_NOW - (i + 1) * HOUR).toISOString(),
+    body: shapes[k],
+  }))
+
+it('the box-less tier is reported alongside, without moving unattested membership', async () => {
+  const keys = [
+    'unattested',
+    'attested',
+    'numbered',
+    'plainBullets',
+    'noWhenSection',
+    'unreadableHeading',
+  ]
+  const { result } = await scanDriven(rowsFor(keys))
+  assert.equal(result.readable, true)
+  assert.deepEqual(
+    result.unattested.map((s) => s.number),
+    [700],
+    'only the checkbox shape may accuse - #99 selectivity bar, unedited',
+  )
+  assert.deepEqual(
+    result.unattestable.map((s) => [s.number, s.shape]),
+    [
+      [702, 'numbered'],
+      [703, 'plain-bullets'],
+      [704, 'no-when-section'],
+      [705, 'unreadable-heading'],
+    ],
+    `the excluded population must be enumerable by reason: ${JSON.stringify(result.unattestable)}`,
+  )
+  // the fully-ticked issue is in neither list: it attested itself, and folding it in would read as noise
+  assert.ok(
+    !result.unattestable.some((s) => s.number === 701),
+    'an attested close belongs to no tier',
+  )
+  assert.match(result.note, /1 unattested/)
+  assert.match(
+    result.note,
+    /4 with no tick mechanism/,
+    `the note reports the count it dropped: ${result.note}`,
+  )
+})
+
+it('the note stays quiet about the warning when no heading is unreadable', async () => {
+  const { result } = await scanDriven(
+    rowsFor(['unattested', 'numbered', 'plainBullets', 'noWhenSection']),
+  )
+  assert.equal(result.unattestable.length, 3, 'the tier itself still reports')
+  assert.ok(
+    !result.note.includes('#114 WARNING'),
+    `a warning with nothing to warn about: ${result.note}`,
+  )
+})
+
+// The loud half, and the reason this tier is not merely bookkeeping: `coord done` refuses on
+// `attestable && unticked > 0`, so four real boxes under an unreadable heading gate nothing at all and
+// used to attest themselves clean as `unattested: 0/0`.
+it('the warning names the unreadable-heading issue and no other', async () => {
+  const { result } = await scanDriven(
+    rowsFor(['numbered', 'unreadableHeading']),
+  )
+  assert.ok(
+    result.note.includes('#114 WARNING'),
+    `the bypass case reported nothing: ${result.note}`,
+  )
+  assert.ok(
+    result.note.includes('#701'),
+    `the warning did not name the offender: ${result.note}`,
+  )
+  assert.ok(
+    !result.note.includes('#700'),
+    'a legitimately numbered closure must not be accused by the warning',
+  )
+})
