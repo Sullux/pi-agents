@@ -193,7 +193,7 @@ const scanUnattestedClosures = async ({
   windowHours = UNATTESTED_WINDOW_HOURS,
   limit = CLOSE_SCAN_LIMIT,
 } = {}) => {
-  // an explicit `limit` of null lets listIssues apply its own ceiling ✓ the call must not forward the key
+  // an explicit `limit` of null lets listIssues apply its own ceiling; the call must not forward the key
   const options =
     limit === null ? { state: 'closed' } : { state: 'closed', limit }
 
@@ -279,8 +279,11 @@ const checkBacklogAvailability = async ({
     }
   }
 
-  // one extra read per dispatch cycle, bounded by CLOSE_SCAN_LIMIT rather than the full history: a
-  // a window of hours is the actionable population, and an unbounded scan would report the fleet's childhood.
+  // one extra read per dispatch cycle. It is NOT a bounded read: CLOSE_SCAN_LIMIT is null, so the fetch
+  // inherits listIssues' own ceiling and pulls the whole closed page. What makes the report actionable is the
+  // WINDOW filter applied after the fetch - a hours-wide window is the population, and an unbounded report
+  // would name the fleet's childhood. Runs before the branch checks below, so every state except the
+  // early-returned `idle_empty` has already paid for it.
   const closures = await scanUnattestedClosures({ github, now })
 
   const allMyIssues = nonHubIssues.filter((i) => isMine(i, agent))
@@ -326,10 +329,13 @@ const checkBacklogAvailability = async ({
     }
   }
 
+  // #103: this path already ran the scan two lines above, so dropping the result threw away a read that was
+  // paid for - and peer_contention is the one state where an agent has nothing else to do with the next 60s.
   return {
     status: 'idle_busy',
     reason: 'peer_contention',
     waitSeconds: 60,
+    closures,
   }
 }
 
