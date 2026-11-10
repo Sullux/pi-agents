@@ -376,3 +376,37 @@ describe('#126 kind casing and the per-issue timeline read', () => {
     )
   })
 })
+
+describe('#123 pullRequest: the body-bearing read behind the evidence chain', () => {
+  it('selects number/mergedAt/state/body in one jq shape and parses it', async () => {
+    const seen = []
+    const client = GitHubClient({
+      repo: 'Sullux/pi-agents',
+      execFile: (cmd, args) => {
+        seen.push([cmd, ...args].join(' '))
+        return JSON.stringify({
+          number: 778,
+          mergedAt: '2026-11-10T04:03:13Z',
+          state: 'closed',
+          body: '- [x] ticked',
+        })
+      },
+    })
+    const pr = await client.pullRequest(778)
+    assert.equal(pr.number, 778)
+    assert.equal(pr.mergedAt, '2026-11-10T04:03:13Z')
+    assert.match(pr.body, /ticked/)
+    assert.match(seen[0], /repos\/Sullux\/pi-agents\/pulls\/778/)
+  })
+
+  it('empty output is a FAILED call, not a bodyless PR', async () => {
+    const client = GitHubClient({
+      repo: 'Sullux/pi-agents',
+      execFile: () => '',
+    })
+    await assert.rejects(
+      () => client.pullRequest(778),
+      /empty output - refusing to read a failed call as a bodyless PR/,
+    )
+  })
+})

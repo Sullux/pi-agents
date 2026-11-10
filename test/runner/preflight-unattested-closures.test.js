@@ -281,3 +281,153 @@ it('the warning names the unreadable-heading issue and no other', async () => {
     'a legitimately numbered closure must not be accused by the warning',
   )
 })
+
+// #123: the sweep's accusation was issue-body-only prose; two of its three live refutations were closes
+// whose ticks sit in the CLOSING PR's body. These arms pin the evidence chain, its bounds, and the two
+// renderings - never a live population count (in-window figures move; #114 box 4 and #1209's 0/8->8/8).
+const closedRow = (number, ticked, unticked) => ({
+  number,
+  closedAt: '2026-11-10T02:00:00Z',
+  body: body(ticked, unticked),
+  title: `x${number}`,
+  labels: [],
+  comments: [],
+})
+
+const xrefEvent = (prNumber, at = '2026-11-10T01:59:00Z') =>
+  JSON.stringify({
+    event: 'cross-referenced',
+    created_at: at,
+    source: { issue: { number: prNumber, pull_request: {} } },
+  })
+
+const scanWithEvidence = async (rows, { timeline = [], pullRequest } = {}) => {
+  const state = { listCalls: 0, timelineCalls: [], prCalls: [] }
+  const github = {
+    listIssues: async () => {
+      state.listCalls += 1
+      return rows
+    },
+    issueTimeline: async (n) => {
+      state.timelineCalls.push(n)
+      if (typeof timeline === 'function') return timeline(n)
+      return timeline.map((line) => JSON.parse(line))
+    },
+    pullRequest: async (n) => {
+      state.prCalls.push(n)
+      if (pullRequest) return pullRequest(n)
+      return { number: n, mergedAt: '2026-11-10T02:00:01Z', body: body(2, 0) }
+    },
+  }
+  const result = await scanUnattestedClosures({ github, now: () => FIXED_NOW })
+  return { result, state }
+}
+
+it('#123 evidence: a closing PR full of ticks relocates the accusation, per-row and aggregate', async () => {
+  const { result, state } = await scanWithEvidence([closedRow(777, 0, 2)], {
+    timeline: [xrefEvent(778)],
+  })
+  assert.equal(
+    state.timelineCalls.length,
+    1,
+    'the selected row must travel the timeline seam',
+  )
+  assert.deepEqual(
+    {
+      pr: result.unattested[0].evidence.pr,
+      ticked: result.unattested[0].evidence.ticked,
+    },
+    { pr: 778, ticked: 2 },
+  )
+  assert.ok(
+    result.note.includes(
+      '#777 0/2 in the issue body, 2/2 in PR #778 - port the ticks or annotate why each box cannot be met',
+    ),
+    `the pr-case rendering is absent: ${result.note}`,
+  )
+  assert.ok(
+    !result.note.includes(
+      'these closed without anyone ticking a Done-when box',
+    ),
+    'the false human-behavior claim survived while the tree says the ticks exist',
+  )
+})
+
+it('#123 the none case keeps the old wording, and a cross-reference AFTER the close is not evidence', async () => {
+  const clean = await scanWithEvidence([closedRow(777, 0, 2)], { timeline: [] })
+  assert.ok(
+    clean.result.note.includes(
+      'these closed without anyone ticking a Done-when box',
+    ),
+  )
+  assert.equal(clean.result.unattested[0].evidence.none, true)
+  const late = await scanWithEvidence([closedRow(777, 0, 2)], {
+    timeline: [xrefEvent(778, '2026-11-10T02:00:02Z')],
+  })
+  assert.equal(
+    late.result.unattested[0].evidence.none,
+    true,
+    'a post-close xref cannot be its evidence',
+  )
+  assert.equal(
+    late.state.prCalls.length,
+    0,
+    'the late candidate must not cost a PR read',
+  )
+})
+
+it('#123 membership is UNCHANGED: identical numbers with and without the evidence reads', async () => {
+  const corpus = [
+    closedRow(777, 0, 2),
+    closedRow(779, 1, 1),
+    closedRow(781, 0, 3),
+  ]
+  const withEv = await scanWithEvidence(corpus, { timeline: [xrefEvent(778)] })
+  const blind = await scanWithEvidence(corpus, {
+    timeline: () => {
+      throw new Error('timeline unavailable')
+    },
+  })
+  assert.deepEqual(
+    withEv.result.unattested.map((r) => r.number),
+    blind.result.unattested.map((r) => r.number),
+  )
+  assert.equal(
+    blind.result.unattested[0].evidence.none,
+    true,
+    'a failed read suppresses, never invents',
+  )
+})
+
+it('#123 cost: zero flagged rows make zero timeline calls; five flagged cost at most MAX_CLOSURE_LINES', async () => {
+  const clean = await scanWithEvidence([closedRow(777, 5, 0)], { timeline: [] })
+  assert.equal(
+    clean.state.timelineCalls.length,
+    0,
+    'an unused seam must stay untouched on a clean board',
+  )
+  assert.equal(clean.result.unattested.length, 0)
+  const many = await scanWithEvidence(
+    [1, 2, 3, 4, 5].map((n) => closedRow(700 + n, 0, 1)),
+    { timeline: [] },
+  )
+  assert.equal(
+    many.state.timelineCalls.length,
+    3,
+    'reads are bounded by displayed rows, not the closed set',
+  )
+  assert.ok(
+    many.result.note.includes('+2 more, newest first'),
+    many.result.note,
+  )
+})
+
+it('#123 dropped rows carry unscanned evidence, so prose never claims a location it did not read', async () => {
+  const many = await scanWithEvidence(
+    [1, 2, 3, 4].map((n) => closedRow(700 + n, 0, 1)),
+    { timeline: [] },
+  )
+  const droppedRow = many.result.unattested[3]
+  assert.equal(droppedRow.evidence.none, true)
+  assert.equal(droppedRow.evidence.unscanned, true)
+})
