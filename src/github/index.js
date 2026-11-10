@@ -156,7 +156,8 @@ const GitHubClient = ({
     return result?.toString()?.trim() || ''
   }
 
-  // Returns `{ isPullRequest, title, body }` for the number, or `undefined` when gh errors or the
+  // Returns `{ isPullRequest, state, stateReason, title, body }` for the number, or `undefined`
+  // when gh errors or the
   // payload will not parse - an unresolvable number is NOT reported as a pull request, because the
   // verbs already fail loudly on their own read of it and this guard's job is only to stop a write
   // that would land on the wrong kind of artifact.
@@ -165,7 +166,7 @@ const GitHubClient = ({
       return JSON.parse(
         await ghApi(
           `repos/${activeRepo}/issues/${number}`,
-          '{isPullRequest: (.pull_request != null), title, body}',
+          '{isPullRequest: (.pull_request != null), state: .state, stateReason: .state_reason, title, body}',
         ),
       )
     } catch {

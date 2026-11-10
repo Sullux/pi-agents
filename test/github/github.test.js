@@ -54,6 +54,51 @@ describe('GitHubClient', () => {
       )
     }
   })
+
+  it('#106: issueKind asks gh api for state and stateReason in the SAME payload as kind', async () => {
+    // The service's CLOSED guard reads `kind?.state`, so the jq projection is the load-bearing
+    // line in the REAL call - a coord-test double can carry the field by hand forever while the
+    // live API answer drops it, which is the mock-only false-green this file already pins for
+    // listIssues above. This arm fires on the argv STRING, not on a fixture.
+    let capturedArgs = []
+    const mockExec = (cmd, args) => {
+      capturedArgs = [cmd, ...args]
+      return JSON.stringify({
+        isPullRequest: false,
+        state: 'CLOSED',
+        stateReason: 'COMPLETED',
+        title: 'an issue',
+        body: '',
+      })
+    }
+    const client = GitHubClient({
+      execFile: mockExec,
+      repo: 'Sullux/pi-agents',
+    })
+    const kind = await client.issueKind(4)
+    assert.equal(
+      kind.state,
+      'CLOSED',
+      'the parsed payload keeps the field the guard branches on',
+    )
+    assert.equal(
+      kind.stateReason,
+      'COMPLETED',
+      'and the reason the refusal message prints',
+    )
+    assert.equal(capturedArgs[0], 'gh')
+    const jq = capturedArgs[capturedArgs.indexOf('--jq') + 1]
+    for (const select of [
+      'state: .state',
+      'stateReason: .state_reason',
+      '(.pull_request != null)',
+    ]) {
+      assert.ok(
+        jq.includes(select),
+        `issueKind jq must project ${select}: got ${jq}`,
+      )
+    }
+  })
 })
 
 // The pitcairn coordination hub (issue #4) grew to 1,051,909 bytes across 783 comments. Node's

@@ -5,7 +5,11 @@ const {
   hasClaimBy,
   unresolvedProtocolLines,
 } = require('./owner')
-const { isIssueNumber, pullRequestRefusal } = require('./issueNumber')
+const {
+  isIssueNumber,
+  pullRequestRefusal,
+  closedRefusal,
+} = require('./issueNumber')
 const {
   parseScope,
   checkScopeCollision,
@@ -87,10 +91,19 @@ const CoordService = ({
   // check - this is the kind half. Only the POSITIONAL is tested: `--pr <n>` legitimately addresses a
   // pull request, and refusing it would make the tool reject its own correct usage. The board read
   // paths (board / sync) deliberately do not pay the extra spawn.
-  const refuseIfPullRequest = async (sub, number) => {
+  //
+  // #106 adds the STATE half, and the kind check stays FIRST because a merged PR is CLOSED too and
+  // "is a pull request" is the more specific diagnosis. An issue-shaped object whose `state` is not
+  // OPEN is refused identically: pitcairn#1218 measured the cost of guarding kind alone - a review
+  // verb rc=0'd onto an issue CLOSED 53 seconds earlier and re-stamped `status:in-review` on
+  // finished work. `undefined` state (a double that never learned the field) is treated as open so
+  // existing fixtures keep measuring their own guards; the real `gh api` payload always carries it.
+  const refuseIfNotOpen = async (sub, number) => {
     const kind = await github.issueKind(number)
-    return kind?.isPullRequest
-      ? { ok: false, error: pullRequestRefusal(sub, number, kind) }
+    if (kind?.isPullRequest)
+      return { ok: false, error: pullRequestRefusal(sub, number, kind) }
+    return kind?.state === 'CLOSED'
+      ? { ok: false, error: closedRefusal(sub, number, kind) }
       : null
   }
 
@@ -200,7 +213,7 @@ const CoordService = ({
 
   const claim = async (number, { plan = '', eta = '' } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
-    const notAnIssue = await refuseIfPullRequest('claim', number)
+    const notAnIssue = await refuseIfNotOpen('claim', number)
     if (notAnIssue) return notAnIssue
     const issue = await github.viewIssue(number)
     if (!issue) return { ok: false, error: `Issue #${number} not found` }
@@ -300,7 +313,7 @@ const CoordService = ({
 
   const release = async (number, { reason = '' } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
-    const notAnIssue = await refuseIfPullRequest('release', number)
+    const notAnIssue = await refuseIfNotOpen('release', number)
     if (notAnIssue) return notAnIssue
     const commentBody = `**RELEASE** | agent: agent-${cleanCurrent} | reason: ${reason || 'unspecified'}`
     await github.commentIssue(number, commentBody)
@@ -318,7 +331,7 @@ const CoordService = ({
 
   const status = async (number, message = '') => {
     if (!isIssueNumber(number)) return invalidNumber(number)
-    const notAnIssue = await refuseIfPullRequest('status', number)
+    const notAnIssue = await refuseIfNotOpen('status', number)
     if (notAnIssue) return notAnIssue
     const commentBody = `**STATUS** | agent: agent-${cleanCurrent} | at: ${now()}\n\n${message}`
     await github.commentIssue(number, commentBody)
@@ -388,7 +401,7 @@ const CoordService = ({
 
   const review = async (number, { pr = '', text = '' } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
-    const notAnIssue = await refuseIfPullRequest('review', number)
+    const notAnIssue = await refuseIfNotOpen('review', number)
     if (notAnIssue) return notAnIssue
     const commentBody =
       `**REVIEW** | agent: agent-${cleanCurrent} | at: ${now()}` +
@@ -409,7 +422,7 @@ const CoordService = ({
 
   const done = async (number, { pr = '', text = '', force = false } = {}) => {
     if (!isIssueNumber(number)) return invalidNumber(number)
-    const notAnIssue = await refuseIfPullRequest('done', number)
+    const notAnIssue = await refuseIfNotOpen('done', number)
     if (notAnIssue) return notAnIssue
     // #28: the read moved ABOVE the write. `done` used to post its **DONE** comment, strip
     // `status:*`, and close without asking who held the issue - measured on pitcairn #1104, where

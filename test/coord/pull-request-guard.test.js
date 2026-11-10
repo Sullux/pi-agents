@@ -31,6 +31,12 @@ const recorder = ({
   prNumbers = [],
   body = '',
   title = 'feat: the thing',
+  // #106: state rides the same payload as kind. The default is the OPEN shape so every pre-#106
+  // arm keeps measuring the guard it was written for; a `undefined`-state double also passes (the
+  // service treats only an explicit 'CLOSED' as finished), which is what keeps this field from
+  // quietly refusing fixtures that never learned it.
+  state = 'OPEN',
+  stateReason = '',
 } = {}) => {
   const writes = []
   // #54: numbers arrive as CLI strings on the `--pr` path and as integers from a programmatic caller,
@@ -47,6 +53,8 @@ const recorder = ({
       number,
       title,
       body,
+      state,
+      stateReason,
     }),
     listIssues: async () => [],
     viewIssue: async () => ({
@@ -409,4 +417,117 @@ test('an unresolvable number is not reported as a pull request (the probe is hon
     false,
     'a missing kind probe falls through to the verb, which reads it itself',
   )
+})
+
+// #106: the STATE half. pitcairn#1218 is the witness: auto-closed by PR #1225's Closes trailer at
+// 03:27:28Z, then `page coord review 1218 --pr 1225` ran at 03:28:21Z - rc=0, printed `Moved #1218
+// to in-review`, posted a **REVIEW** onto the CLOSED issue, and re-stamped `status:in-review` on
+// finished work. The kind guard above cannot see it: the artifact WAS an issue, it just was not an
+// OPEN one. The Done-when asks for refusals proven on the mock's CALL LIST, not on the message - a
+// refusal that writes first and complains after is the measured incident wearing a nicer error.
+
+test('#106 box 1: every mutating verb refuses an ISSUE-shaped object whose state is CLOSED, and zero writes land', async () => {
+  const github = recorder({
+    isPullRequest: false,
+    state: 'CLOSED',
+    stateReason: 'COMPLETED',
+  })
+  const results = await callEach(github)
+  assert.equal(results.length, 5)
+  for (const [verb, res] of results) {
+    assert.equal(res.ok, false, `${verb} must refuse a closed issue`)
+    assert.match(
+      res.error,
+      /#21 is CLOSED \(COMPLETED\)/,
+      `${verb}: names the number, the state, and the reason`,
+    )
+    assert.match(
+      res.error,
+      /Nothing was written/,
+      `${verb}: says the write never happened`,
+    )
+    assert.match(
+      res.error,
+      /gh pr comment/,
+      `${verb}: sends merged attestations to the PR thread`,
+    )
+    assert.match(
+      res.error,
+      /gh issue reopen/,
+      `${verb}: makes resuming a deliberate, named step`,
+    )
+    assert.match(
+      res.error,
+      new RegExp(`Usage: page coord ${verb}`),
+      `${verb}: keeps the usage line`,
+    )
+  }
+  assert.deepEqual(
+    github.writes,
+    [],
+    'the proof is the CALL LIST: commentIssue/editIssue/closeIssue were never invoked',
+  )
+})
+
+test('#106 box 2 (positive control): the SAME fixture with state OPEN passes - a guard that refuses everything cannot be told from this one', async () => {
+  const github = recorder({ isPullRequest: false, state: 'OPEN' })
+  const results = await callEach(github)
+  for (const [verb, res] of results) {
+    assert.notEqual(
+      res.ok,
+      false,
+      `${verb}: an open issue is not refused by the state guard`,
+    )
+  }
+  assert.ok(
+    github.writes.length > 0,
+    'and the verbs really wrote, so box 1 silence is the guard, not a dead fixture',
+  )
+})
+
+test('#106 #1218 replay: review --pr against a CLOSED/COMPLETED target refuses BEFORE the PR thread is touched', async () => {
+  // The measured sequence: verdict composed while the PR merged; the merge closed #1218; the verb
+  // then ran and stamped the CLOSED issue. A guard that only blocks the LABEL write but still
+  // posts the comment half would reproduce 3 of the 4 observable faces - so this arm intercepts
+  // commentPr AND viewPr, not just the issue-side recorder writes.
+  const github = recorder({
+    isPullRequest: false,
+    state: 'CLOSED',
+    stateReason: 'COMPLETED',
+  })
+  const prCalls = []
+  github.commentPr = async (...args) => {
+    prCalls.push(args)
+    return ''
+  }
+  github.viewPr = async (...args) => {
+    prCalls.push(['view', ...args])
+    return 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+  }
+  const coord = serviceOver(github)
+  const res = await coord.review(21, { pr: '31', text: 'verdict' })
+  assert.equal(res.ok, false, 'review refuses its closed positional')
+  assert.match(res.error, /CLOSED/)
+  assert.deepEqual(prCalls, [], 'the --pr thread is not read or written either')
+  assert.deepEqual(
+    github.writes,
+    [],
+    'no label, no protocol comment on the closed artifact',
+  )
+})
+
+test('#106 box 3: a double with NO state field behaves as open - the guard fires only on an explicit CLOSED, so no pre-#106 fixture is quietly refused', async () => {
+  const github = {
+    ...recorder({ isPullRequest: false }),
+    issueKind: async (number) => ({
+      isPullRequest: false,
+      number,
+      title: 'an issue',
+      body: '',
+    }),
+  }
+  const results = await callEach(github)
+  for (const [verb, res] of results) {
+    assert.notEqual(res.ok, false, `${verb}: undefined state is not a refusal`)
+  }
 })
