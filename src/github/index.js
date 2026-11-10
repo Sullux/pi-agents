@@ -176,7 +176,7 @@ const GitHubClient = ({
   const listIssues = async (options = {}) => {
     const state = options.state || 'open'
     const limit = options.limit || ISSUE_PAGE_CEILING
-    const raw = runGh([
+    const argv = [
       'issue',
       'list',
       '--state',
@@ -185,7 +185,16 @@ const GitHubClient = ({
       String(limit),
       '--json',
       'number,title,labels,comments,body,closedAt',
-    ])
+    ]
+    // #107: --limit cannot say "the last six hours", and asking for a smaller number is not a
+    // smaller read when the population exceeds the ceiling either way - the rows past the cap are
+    // simply invisible. A caller that can name a server-side predicate now has a way to pass one.
+    // ABSENT, never empty: gh treats --search "" as a predicate matching nothing, so forwarding an
+    // empty option would silently narrow the very set this client guards - the false-negative
+    // direction, where a claim that should collide is waved through.
+    const search = options.search
+    if (search !== undefined && search !== '') argv.push('--search', search)
+    const raw = runGh(argv)
     // The old `catch { return [] }` was the bug, not the guard. Four degraded shapes all landed in it
     // and each one emptied the collision set: empty stdout, an `<html>Server Error</html>` body,
     // truncated JSON, and - reachable with no catastrophe at all - one `warning:` line printed above
@@ -221,8 +230,12 @@ const GitHubClient = ({
     // cry wolf the way the `withFullTimelines` header warns about for the comment axis.
     if (parsed.length === limit) {
       throw new Error(
-        `coord: gh issue list returned exactly ${limit} issues for ${activeRepo || 'the resolved repo'}, ` +
-          'so the open set is TRUNCATED and the tail is invisible to the scope gate - raise ' +
+        `coord: gh issue list returned exactly ${limit} issues on the ${state} axis for ` +
+          `${activeRepo || 'the resolved repo'}, ` +
+          (state === 'open'
+            ? 'so the OPEN set is TRUNCATED and the tail is invisible to the scope gate - raise '
+            : 'so the CLOSED set is TRUNCATED and this read cannot be swept at all - bound it ' +
+              'server-side (pass options.search, e.g. closed:>=<UTC date>) or raise ') +
           `ISSUE_PAGE_CEILING (currently ${ISSUE_PAGE_CEILING})` +
           ' or pass a larger options.limit. A missed collision is worse than a refused claim.',
       )
