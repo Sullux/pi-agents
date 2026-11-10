@@ -46,6 +46,7 @@ const procOf = (entries) => () => entries
 
 const runner = (pid, verb = 'start', comm = '(page)') => ({
   pid,
+  cwd: `/home/charles/agents/Who${pid}`,
   argv: [
     'node',
     '/home/charles/sullux/pi-agents/bin/page',
@@ -90,6 +91,11 @@ describe('runner currency census (#130)', () => {
     assert.match(text, /CANNOT emit the currency note/)
     assert.match(text, /restart the runner/)
     assert.match(text, /aaaaaaa/, `the reference sha is missing from: ${text}`)
+    assert.match(
+      text,
+      /cwd=\/home\/charles\/agents\/Who101/,
+      `cwd missing from: ${text}`,
+    )
   })
 
   it('reports the loaded commit with the merge count for a runner that CAN warn', () => {

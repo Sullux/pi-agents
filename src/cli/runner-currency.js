@@ -1,4 +1,4 @@
-const { readdirSync, readFileSync } = require('node:fs')
+const { readdirSync, readFileSync, readlinkSync } = require('node:fs')
 const { execFileSync } = require('node:child_process')
 const { join } = require('node:path')
 
@@ -51,7 +51,22 @@ const defaultProc = () => {
         .filter(Boolean)
       const stat = read(join('/proc', name, 'stat'))
       const afterComm = stat.slice(stat.lastIndexOf(')') + 2).split(/\s+/)
-      return { pid, argv, starttimeTicks: Number(afterComm[19]), bootEpochMs }
+      // The cwd is the only field that tells an operator WHOSE daemon this is, and every agent here pushes
+      // as the same account - so without it a restart decision is a guess about someone else's session,
+      // which is the recorded trap. It is a symlink, so readlink, not read.
+      let cwd = ''
+      try {
+        cwd = readlinkSync(join('/proc', name, 'cwd'))
+      } catch {
+        cwd = ''
+      }
+      return {
+        pid,
+        argv,
+        starttimeTicks: Number(afterComm[19]),
+        bootEpochMs,
+        cwd,
+      }
     })
 }
 
@@ -138,6 +153,7 @@ const RunnerCurrency = ({
               pid: entry.pid,
               bootedAt: new Date(bootMs).toISOString(),
               state: 'cannot-warn',
+              cwd: entry.cwd,
               argv: entry.argv,
             }
           : {
@@ -145,6 +161,7 @@ const RunnerCurrency = ({
               bootedAt: new Date(bootMs).toISOString(),
               state: 'current',
               loaded: loadedAt(bootMs),
+              cwd: entry.cwd,
               argv: entry.argv,
             }
       })
@@ -167,11 +184,11 @@ const RunnerCurrency = ({
         : '',
       ...mute.map(
         (r) =>
-          `  pid ${r.pid} booted ${r.bootedAt} - predates the annotator, prints no warning`,
+          `  pid ${r.pid} booted ${r.bootedAt} cwd=${r.cwd || 'unknown'} - predates the annotator, prints no warning`,
       ),
       ...live.map(
         (r) =>
-          `  pid ${r.pid} booted ${r.bootedAt} - loaded ${r.loaded || 'older than the retained reflog'}`,
+          `  pid ${r.pid} booted ${r.bootedAt} cwd=${r.cwd || 'unknown'} - loaded ${r.loaded || 'older than the retained reflog'}`,
       ),
     ]
       .filter(Boolean)
