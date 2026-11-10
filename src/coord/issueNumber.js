@@ -115,6 +115,26 @@ const closedRefusal = (sub, number, kind = {}) => {
   )
 }
 
+// #118: the READ half of the guard. #30 answered "is it a PR", #106 answered "is it CLOSED", and
+// both of them assume the question was actually ANSWERED - a `gh` blip produced `undefined`, the
+// compare produced false, and the verb wrote a protocol line and a label onto an artifact nobody had
+// successfully looked at. Refusing here costs a retry; failing open cost pitcairn#1218.
+const unreadableRefusal = (sub, number, error = {}) => {
+  const reason = `${error?.reason || error?.message || ''}`.trim()
+  return (
+    `Error: coord ${sub}: #${number} could not be READ, so nothing was written - ` +
+    `${reason || 'the kind/state read returned no value'}. ` +
+    "coord verbs refuse on an UNREADABLE target rather than assuming it is open, because the old '" +
+    "read failed' path produced exactly the write this guard exists to stop, with no signal that the " +
+    'check had been skipped. `--force` does not override: force means "I know this artifact is closed", ' +
+    'not "I could not look". Retry the verb; to see the transport error yourself run ' +
+    '`gh api repos/<org>/<repo>/issues/' +
+    number +
+    ' --jq .state`. ' +
+    `Usage: page coord ${USAGE[sub] || sub}.`
+  )
+}
+
 module.exports = {
   USAGE,
   isIssueNumber,
@@ -123,4 +143,5 @@ module.exports = {
   linkedIssues,
   pullRequestRefusal,
   closedRefusal,
+  unreadableRefusal,
 }

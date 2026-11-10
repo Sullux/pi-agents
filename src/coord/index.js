@@ -10,6 +10,7 @@ const {
   isIssueNumber,
   pullRequestRefusal,
   closedRefusal,
+  unreadableRefusal,
 } = require('./issueNumber')
 const {
   parseScope,
@@ -97,15 +98,45 @@ const CoordService = ({
   // "is a pull request" is the more specific diagnosis. An issue-shaped object whose `state` is not
   // OPEN is refused identically: pitcairn#1218 measured the cost of guarding kind alone - a review
   // verb rc=0'd onto an issue CLOSED 53 seconds earlier and re-stamped `status:in-review` on
-  // finished work. `undefined` state (a double that never learned the field) is treated as open so
-  // existing fixtures keep measuring their own guards; the real `gh api` payload always carries it.
+  // finished work.
+  //
+  // #118 replaces the two ways this guard used to fail OPEN, and both were defensible only while the
+  // read itself was assumed infallible:
+  //   (1) `issueKind` swallowed every transport error and answered `undefined`, so a `gh` blip and a
+  //       healthy "it is open" produced the SAME value and the same write. A failed read now THROWS,
+  //       and any throw at all is a refusal here - the guard does not depend on the error being
+  //       tagged, because a double that throws a plain Error models the same outage.
+  //   (2) `kind?.state` being absent read as open, which is why the old fixtures could omit `state`
+  //       entirely. The healthy branch is now an ALLOW-LIST: only `state === 'OPEN'` passes. A double
+  //       must opt into "open" by name (the #118 Done-when's stated requirement, chosen so the #30 kind
+  //       arms keep measuring the kind guard rather than a fixture's silence), and a real `gh api`
+  //       payload always carries it.
+  //   (3) `--force` still does not override any of the three refusals: force asserts "I know this
+  //       artifact is closed", which is a different claim from "I could not look at it".
   const refuseIfNotOpen = async (sub, number) => {
-    const kind = await github.issueKind(number)
+    let kind
+    try {
+      kind = await github.issueKind(number)
+    } catch (error) {
+      return { ok: false, error: unreadableRefusal(sub, number, error) }
+    }
     if (kind?.isPullRequest)
       return { ok: false, error: pullRequestRefusal(sub, number, kind) }
-    return kind?.state === 'CLOSED'
-      ? { ok: false, error: closedRefusal(sub, number, kind) }
-      : null
+    if (kind?.state === 'CLOSED')
+      return { ok: false, error: closedRefusal(sub, number, kind) }
+    if (kind?.state !== 'OPEN')
+      return {
+        ok: false,
+        error: unreadableRefusal(
+          sub,
+          number,
+          new Error(
+            `the read answered state=${JSON.stringify(kind?.state ?? null)}, not OPEN - ` +
+              'a target whose state is neither OPEN nor CLOSED cannot be written to blind',
+          ),
+        ),
+      }
+    return null
   }
 
   // #52: winning a race and being READABLE are two different facts, and today only the first one
@@ -674,7 +705,20 @@ const CoordService = ({
       }
       const listed = open.find((i) => Number(i.number) === number)
       if (!listed) {
-        const kind = await github.issueKind(number)
+        // #118: this read used to answer `undefined` on a blip, which fell to the "closed or outside
+        // the rows read" branch and accused a healthy issue of not existing. A failed read now says
+        // it failed, and still refuses - hub lines are writes.
+        let kind
+        try {
+          kind = await github.issueKind(number)
+        } catch (error) {
+          return {
+            error: hubRefusal(
+              `COORD_HUB=${number} cannot receive a hub line: the kind/state read for #${number} ` +
+                `FAILED (${String(error?.message ?? error).slice(0, 160)}). Nothing was written.`,
+            ),
+          }
+        }
         const why = kind?.isPullRequest
           ? `#${number} is a pull request, not an issue`
           : `#${number} is not an open issue here (closed, or outside the ${open.length} row(s) read)`

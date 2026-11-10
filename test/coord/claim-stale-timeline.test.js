@@ -264,7 +264,7 @@ const build = (base, { agent = 'bravo' } = {}) => {
   let call = 0
   let reads = 0
   const github = {
-    issueKind: async () => ({ isPullRequest: false }),
+    issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
     viewIssue: async () => {
       reads += 1
       const timeline = [

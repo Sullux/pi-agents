@@ -21,7 +21,7 @@ const build = (body, { agent = 'delta' } = {}) => {
   const closed = []
   const coord = CoordService({
     github: {
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       viewIssue: async () => issue,
       listIssues: async () => [issue],
       commentIssue: async (num, text) => {
@@ -213,7 +213,7 @@ describe('done (close requires an attestation, #94)', () => {
     const { commented, closed } = build(UNATTENDED, { agent: 'delta' })
     const stranger = CoordService({
       github: {
-        issueKind: async () => ({ isPullRequest: false }),
+        issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
         viewIssue: async () => ({
           number: 50,
           body: UNATTENDED,

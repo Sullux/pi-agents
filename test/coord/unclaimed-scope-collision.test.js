@@ -191,7 +191,7 @@ const claimHarness = ({ rivalLabels = [], rivalComments = [] }) => {
     comments: rivalComments,
   }
   const github = () => ({
-    issueKind: async () => ({ isPullRequest: false }),
+    issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
     viewIssue: async (num) => (num === 1171 ? targetIssue : rival),
     listIssues: async () => [targetIssue, rival],
     commentIssue: async (num, body) => {

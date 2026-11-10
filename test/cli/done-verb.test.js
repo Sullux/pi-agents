@@ -31,7 +31,7 @@ describe('page coord done carries its message (#31)', () => {
       coordFactory: ({ agent }) =>
         CoordService({
           github: {
-            issueKind: async () => ({ isPullRequest: false }),
+            issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
             commentIssue: async (num, body) => posted.push({ num, body }),
             viewIssue: async () => ({
               number: 21,

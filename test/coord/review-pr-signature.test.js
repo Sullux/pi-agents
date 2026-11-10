@@ -41,7 +41,7 @@ const world = ({
   const prReads = []
   const github = {
     repo: 'Sullux/pi-agents',
-    issueKind: async () => ({ isPullRequest: false }),
+    issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
     viewIssue: async () => ({
       number: 34,
       title: 'T',
@@ -194,7 +194,7 @@ describe('#87 CLI half: the operator hears which half landed', () => {
       coordFactory: ({ agent }) =>
         CoordService({
           github: {
-            issueKind: async () => ({ isPullRequest: false }),
+            issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
             viewIssue: async () => ({
               number: 34,
               title: 'T',

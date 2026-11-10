@@ -15,7 +15,7 @@ describe('CoordService', () => {
     let labelsEdited = []
 
     const mockGithub = {
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       viewIssue: async () => mockIssue,
       listIssues: async () => [mockIssue],
       commentIssue: async (num, body) => {
@@ -56,7 +56,7 @@ describe('CoordService', () => {
     }
 
     const mockGithub = {
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       viewIssue: async () => mockIssue,
       listIssues: async () => [mockIssue],
     }
@@ -83,7 +83,7 @@ describe('CoordService', () => {
     }
 
     const mockGithub = {
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       viewIssue: async () => targetIssue,
       listIssues: async () => [collidingPeerIssue, targetIssue],
     }
@@ -112,7 +112,7 @@ describe('CoordService', () => {
     }
     const posted = []
     const mockGithub = {
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       viewIssue: async () => target,
       listIssues: async () => [inReview, target],
       commentIssue: async (num, body) => {
@@ -154,7 +154,7 @@ describe('CoordService', () => {
     }
     const posted = []
     const mockGithub = {
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       viewIssue: async () => target,
       listIssues: async () => [inProgress, target],
       commentIssue: async (num, body) => posted.push({ num, body }),
@@ -184,7 +184,7 @@ describe('CoordService', () => {
       comments: [],
     }
     const mockGithub = {
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       viewIssue: async () => target,
       listIssues: async () => [inProgress, target],
       commentIssue: async (num, body) => {

@@ -47,7 +47,7 @@ const harness = ({
     coordFactory: ({ agent }) =>
       CoordService({
         github: {
-          issueKind: async () => ({ isPullRequest: false }),
+          issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
           viewIssue: async () => ({
             ...issue,
             comments: [

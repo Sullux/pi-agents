@@ -65,6 +65,21 @@ const world = () => {
       ],
     }),
   )
+  // #118: the shim's catch-all answered `gh api` with `{}`, so the kind probe read an object with
+  // no `state` - and a target whose state is unknown is now a REFUSAL rather than a write. Real
+  // `gh api` payloads always carry the field, so the api branch gets its own fixture file, the same
+  // trick #28 used for `issue view` because JSON full of quotes fights the shim's shell quoting.
+  writeFileSync(
+    join(dir, 'issue-kind.json'),
+    JSON.stringify({
+      number: 999999,
+      isPullRequest: false,
+      state: 'OPEN',
+      stateReason: '',
+      title: '#13 shim fixture',
+      body: '## Files\nsrc/foo.js',
+    }),
+  )
   writeFileSync(
     join(dir, 'gh'),
     [
@@ -77,6 +92,7 @@ const world = () => {
       // claimant (COORD_AGENT=pi/tester, which cleanAgent folds to 'tester'). The answer lives in a
       // file because JSON full of double quotes fights the shim's own shell quoting.
       '  *"issue view"*) cat "${PI13_LOG%/*}/issue-view.json" ;;',
+      '  api*) cat "${PI13_LOG%/*}/issue-kind.json" ;;',
       '  *) echo "{}" ;;',
       'esac',
     ].join('\n') + '\n',
@@ -185,7 +201,7 @@ describe('#13 the coord service cannot reach a gh write with a bad number', () =
   const serviceWith = () => {
     const calls = []
     const github = {
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       viewIssue: async (n) => {
         calls.push(['viewIssue', n])
         return {

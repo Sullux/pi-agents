@@ -24,7 +24,7 @@ const world = ({ comments, onWrite, agent = 'agent-delta' }) => {
     coordFactory: () =>
       CoordService({
         github: {
-          issueKind: async () => ({ isPullRequest: false }),
+          issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
           viewIssue: async (number) => ({
             number,
             title: '#28 fixture',

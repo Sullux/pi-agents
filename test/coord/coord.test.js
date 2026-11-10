@@ -568,7 +568,7 @@ describe('Coordination Engine: comment-timeline completeness', () => {
     return {
       calls,
       repo: 'test/repo',
-      issueKind: async () => ({ isPullRequest: false }),
+      issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
       listIssues: async () => issues,
       viewIssue: async (number) => {
         calls.viewIssue.push(number)

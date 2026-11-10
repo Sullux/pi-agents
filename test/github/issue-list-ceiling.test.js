@@ -125,6 +125,8 @@ describe('listIssues distinguishes an empty set from a failed read (#85)', () =>
       if (args.includes('api'))
         return JSON.stringify({
           isPullRequest: false,
+          state: 'OPEN',
+          stateReason: '',
           title: 't',
           body: issue.body,
         })

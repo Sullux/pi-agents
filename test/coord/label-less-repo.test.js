@@ -32,7 +32,7 @@ const build = ({ taxonomy, seam = true, fail = false } = {}) => {
     comments: [],
   }
   const github = {
-    issueKind: async () => ({ isPullRequest: false }),
+    issueKind: async () => ({ isPullRequest: false, state: 'OPEN' }),
     viewIssue: async () => ({
       ...issue,
       comments: [{ body: '**CLAIM** | agent: foxtrot | at: 1700000000000' }],
