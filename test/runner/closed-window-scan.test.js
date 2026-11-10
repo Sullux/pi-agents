@@ -64,24 +64,62 @@ test('a window under the cap completes in one read, forwards both bounds, and ke
   assert.equal(out.slices[0].read, 4, 'the read count is the raw reply length, not the accepted length')
 })
 
-test('an at-cap window bisects, unions without double counting, and refuses the failed call only', async () => {
+// #148: the claim a wide sweep must earn is COMPLETENESS - the union of the bisected leaves must equal what one
+// un-truncated read of the whole window would have returned. A server-accurate fake is what makes that assertion
+// non-vacuous: gh filters `closed:>=D1 closed:<=D2` at DAY granularity (measured against pitcairn: the two-bound form,
+// the range form and a client-windowed lower-bound-only read each returned the same 27 rows), so every leaf reads a
+// day-floor superset and the exact `closedAt` filter inside the module is what decides membership.
+const MID = '2026-11-06T15:00:00Z'
+const WORLD = [
+  { number: 20, closedAt: '2026-11-02T10:00:00Z' }, // before `from`, but inside the floor day
+  { number: 21, closedAt: '2026-11-02T20:00:00Z' },
+  { number: 22, closedAt: '2026-11-04T09:00:00Z' },
+  { number: 23, closedAt: MID }, // exactly the bisection mid: disjointness is decided by which half may claim it
+  { number: 24, closedAt: '2026-11-09T09:00:00Z' },
+  { number: 25, closedAt: '2026-11-10T10:00:00Z' },
+]
+
+const serverRead = (search) => {
+  const [a, b] = search.match(/\d{4}-\d{2}-\d{2}/g)
+  return WORLD.filter((r) => r.closedAt.slice(0, 10) >= a && r.closedAt.slice(0, 10) <= b)
+}
+
+const exactWindow = (fromMs, toMs) =>
+  WORLD.filter((r) => Date.parse(r.closedAt) >= fromMs && Date.parse(r.closedAt) < toMs)
+
+test('an at-cap window bisects and the union equals a single un-truncated read of the same window', async () => {
   const github = fakeGithub((options) => {
     if (dayGap(options.search) >= 5) throw atCapError()
-    return [
-      { number: 10, closedAt: '2026-11-05T12:00:00Z' },
-      // minted by BOTH halves, because each half's day floor covers it: the union must collapse it.
-      { number: 11, closedAt: '2026-11-06T02:00:00Z' },
-      { number: 12, closedAt: '2026-11-09T09:00:00Z' },
-    ]
+    return serverRead(options.search)
   })
   const out = await scanClosedWindow({ github, now, windowHours: 24 * 8 })
   assert.equal(out.calls, 3, 'one refused read plus the two halves that answered it')
-  assert.equal(out.slices.filter((s) => s.bisected).length, 1)
+  assert.equal(out.slices.filter((x) => x.bisected).length, 1)
   assert.equal(out.readable, true, `unexpected note: ${out.note}`)
-  const numbers = out.rows.map((r) => r.number)
-  assert.deepEqual([...new Set(numbers)].sort(), numbers.slice().sort())
-  assert.equal(numbers.length, 3, `union must not double count the boundary row, got ${numbers}`)
-  assert.ok(out.scanned === out.rows.length, 'scanned and rows must agree')
+  const from = NOW - 24 * 8 * 3600000
+  assert.deepEqual(
+    out.rows.map((r) => r.number),
+    exactWindow(from, NOW).map((r) => r.number).sort((x, y) => y - x),
+    'the bisected union must be the whole-window answer - a leaf that lost or invented rows is the failure this fix is for',
+  )
+})
+
+test('the bisected leaves are disjoint, which is why no boundary row is ever counted twice', async () => {
+  const github = fakeGithub((options) => {
+    if (dayGap(options.search) >= 5) throw atCapError()
+    return serverRead(options.search)
+  })
+  const out = await scanClosedWindow({ github, now, windowHours: 24 * 8 })
+  const acceptedAcrossLeaves = out.slices.filter((x) => !x.bisected).reduce((n, x) => n + x.accepted, 0)
+  assert.equal(
+    acceptedAcrossLeaves,
+    out.rows.length,
+    'a row claimed by two leaves means the halves overlap - the Map would hide it, so this asserts the partition',
+  )
+  assert.ok(
+    out.slices.some((x) => !x.bisected && x.from === Date.parse(MID)),
+    'the row at the exact mid must belong to the RIGHT half: [from, mid) then [mid, to)',
+  )
 })
 
 test('a slice still at cap at the bisect floor answers UNKNOWN, never a clean zero', async () => {
