@@ -22,7 +22,8 @@ const HOUR_MS = 60 * 60 * 1000
 // `returned exactly <n> issues on the <state> axis` is the lead `listIssues` prints when the reply length equals the
 // limit it asked for (src/github/index.js, #134/#135). The shape test is pinned against the shipped source in
 // test/runner/closed-window-scan.test.js so a reword reds there instead of silently disabling the bisect.
-const AT_CAP_RE = /gh issue list returned exactly (\d+) issues on the (\w+) axis/
+const AT_CAP_RE =
+  /gh issue list returned exactly (\d+) issues on the (\w+) axis/
 
 const isAtCapRefusal = (err) => {
   const message = String(err?.message ?? err ?? '')
@@ -68,7 +69,9 @@ const scanClosedWindow = async ({
   const from = to - windowHours * HOUR_MS
   const optionsFor = (a, b) => {
     const search = sliceSearch(a, b)
-    return limit === undefined ? { state: 'closed', search } : { state: 'closed', search, limit }
+    return limit === undefined
+      ? { state: 'closed', search }
+      : { state: 'closed', search, limit }
   }
 
   const queue = [[from, to]]
@@ -105,7 +108,12 @@ const scanClosedWindow = async ({
       if (atCap && spanMs > minSliceMs) {
         const mid = sliceFrom + Math.floor(spanMs / 2)
         queue.push([sliceFrom, mid], [mid, sliceTo])
-        slices.push({ bisected: true, from: sliceFrom, to: sliceTo, rows: atCapRows(err) })
+        slices.push({
+          bisected: true,
+          from: sliceFrom,
+          to: sliceTo,
+          rows: atCapRows(err),
+        })
         continue
       }
       const why = atCap
@@ -120,11 +128,14 @@ const scanClosedWindow = async ({
       continue
     }
     reads += 1
-    const accepted = (rows || []).filter((row) => inWindow(row, sliceFrom, sliceTo))
+    const accepted = (rows || []).filter((row) =>
+      inWindow(row, sliceFrom, sliceTo),
+    )
     // The Map key is what collapses a row that two adjacent slices both see (each slice's day floor covers it);
     // the `has` guard only preserves first-seen content, which identical rows cannot express. Key choice, not the
     // guard, is load-bearing - discrimination run reddens the union arm by keying on the slice instead.
-    for (const row of accepted) if (!seen.has(row.number)) seen.set(row.number, row)
+    for (const row of accepted)
+      if (!seen.has(row.number)) seen.set(row.number, row)
     slices.push({
       bisected: false,
       from: sliceFrom,
@@ -134,7 +145,9 @@ const scanClosedWindow = async ({
     })
   }
 
-  const rows = [...seen.values()].sort((a, b) => Date.parse(b.closedAt) - Date.parse(a.closedAt))
+  const rows = [...seen.values()].sort(
+    (a, b) => Date.parse(b.closedAt) - Date.parse(a.closedAt),
+  )
   return {
     readable: errors.length === 0,
     rows,
@@ -152,4 +165,10 @@ const scanClosedWindow = async ({
   }
 }
 
-module.exports = { scanClosedWindow, isAtCapRefusal, atCapRows, sliceSearch, DAY_MS }
+module.exports = {
+  scanClosedWindow,
+  isAtCapRefusal,
+  atCapRows,
+  sliceSearch,
+  DAY_MS,
+}
