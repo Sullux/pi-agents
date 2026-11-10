@@ -42,6 +42,17 @@ describe('GitHubClient', () => {
     assert.equal(capturedArgs[0], 'gh')
     assert.ok(capturedArgs.includes('--repo'))
     assert.ok(capturedArgs.includes('Sullux/pitcairn-portal'))
+    // #99: the closed-window scan is only as good as the fields this call selects. Dropping `closedAt`
+    // makes every real closure read `undefined`, which the window filter then drops - a false "0
+    // unattested" that no other arm can see, because every fixture already carries the key by hand.
+    const jsonArg = capturedArgs[capturedArgs.indexOf('--json') + 1]
+    const fields = jsonArg.split(',')
+    for (const f of ['number', 'body', 'closedAt']) {
+      assert.ok(
+        fields.includes(f),
+        `listIssues must select ${f}: got ${jsonArg}`,
+      )
+    }
   })
 })
 

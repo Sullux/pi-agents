@@ -18,7 +18,8 @@ describe('Runner: Loop Execution and Continuation Prompts', () => {
     ]
 
     const mockGithub = {
-      listIssues: async () => issues,
+      listIssues: async (options = {}) =>
+        (options.state || 'open') === 'closed' ? [] : issues,
       listPrs: async () => [],
     }
 
@@ -37,9 +38,15 @@ describe('Runner: Loop Execution and Continuation Prompts', () => {
     const res = await runner.runLoop({ maxCycles: 1 })
     assert.equal(res.stopped, true)
     assert.equal(res.reason, 'max_cycles_reached')
-    assert.equal(
-      capturedSession.prompt,
-      'Continue development using the coordinate skill.',
+    // #99 widened this string: the cycle prompt now carries the unattested-closure line, so the
+    // guarantee these arms own is "the base sentence is line one", not "the prompt is only the base".
+    const [firstLine, ...rest] = capturedSession.prompt.split('\n')
+    assert.equal(firstLine, 'Continue development using the coordinate skill.')
+    assert.ok(
+      rest
+        .join('\n')
+        .includes('unattested-closure scan: 0 closed issue(s) scanned'),
+      `the scan's population line must be present, even when clean: ${capturedSession.prompt}`,
     )
     assert.equal(capturedSession.continueSession, true)
   })
@@ -65,7 +72,12 @@ describe('Runner: Loop Execution and Continuation Prompts', () => {
     ]
 
     const mockGithub = {
-      listIssues: async () => (cycleCount === 0 ? issuesCycle1 : issuesCycle2),
+      listIssues: async (options = {}) => {
+        // #99: the scan reads the closed axis with its own call - a mock that ignored `state` handed
+        // it open rows and the report counted them as closures.
+        if ((options.state || 'open') === 'closed') return []
+        return cycleCount === 0 ? issuesCycle1 : issuesCycle2
+      },
       listPrs: async () => [],
     }
 
@@ -87,9 +99,15 @@ describe('Runner: Loop Execution and Continuation Prompts', () => {
     assert.equal(capturedSessions.length, 2)
 
     // Cycle 1: Continuing claim
-    assert.equal(
-      capturedSessions[0].prompt,
-      'Continue development using the coordinate skill.',
+    // #99: same widening as the first arm - line one is still the base sentence, and the cycle prompt now
+    // also carries the scan's population line (here: a clean, empty scan, which must still be named).
+    const [contFirst, ...contRest] = capturedSessions[0].prompt.split('\n')
+    assert.equal(contFirst, 'Continue development using the coordinate skill.')
+    assert.ok(
+      contRest
+        .join('\n')
+        .includes('unattested-closure scan: 0 closed issue(s) scanned'),
+      `clean sweeps stay visible so absence is not mistaken for blindness: ${capturedSessions[0].prompt}`,
     )
     assert.equal(capturedSessions[0].continueSession, true)
 
@@ -113,7 +131,8 @@ describe('Runner: Loop Execution and Continuation Prompts', () => {
     ]
 
     const mockGithub = {
-      listIssues: async () => issues,
+      listIssues: async (options = {}) =>
+        (options.state || 'open') === 'closed' ? [] : issues,
       listPrs: async () => [],
     }
 
@@ -211,5 +230,42 @@ describe('Runner: #90 review-gap advice reaches the cycle prompt', () => {
     assert.match(line, /\(\+2 more\)/)
     assert.doesNotMatch(line, /#77/)
     assert.equal(line.split('#').length - 1, 4, 'exactly four PRs are shown')
+  })
+})
+// #99: the renderer side. A scan whose result nothing prints is a report that exists only in tests, so
+// these arms read the PROMPT STRING the agent receives, not the source of the function that builds it.
+describe('Runner: closure note reaches the prompt (#99)', () => {
+  it('appends the scan note to the cycle prompt when there is one', () => {
+    const prompt = resolveCyclePrompt({
+      isNewTask: true,
+      closures: {
+        note: 'unattested-closure scan: 4 scanned, 2 closed within the last 6h, 1 unattested - #7 0/2 ticked, closed 2026-11-10T00:00:00Z',
+      },
+    })
+    assert.ok(prompt.includes('unattested-closure scan'), prompt)
+    assert.ok(
+      prompt.includes('#7 0/2 ticked'),
+      'the named population survives into the prompt',
+    )
+    assert.ok(
+      prompt.startsWith('Proceed with development'),
+      'the base sentence is still first',
+    )
+  })
+
+  it('does not invent a line when the scan returned nothing to say', () => {
+    const bare = resolveCyclePrompt({ isNewTask: false })
+    const withNull = resolveCyclePrompt({ isNewTask: false, closures: null })
+    assert.equal(withNull, bare, 'a null closures must not change the prompt')
+    assert.ok(!withNull.includes('unattested-closure'), withNull)
+  })
+
+  it('carries the UNKNOWN form unchanged, so the agent is not told the repo is clean', () => {
+    const prompt = resolveCyclePrompt({
+      closures: {
+        note: 'unattested-closure scan of the CLOSED axis: the read FAILED (…) - UNKNOWN, not clean',
+      },
+    })
+    assert.ok(prompt.includes('UNKNOWN, not clean'), prompt)
   })
 })
