@@ -134,7 +134,10 @@ describe('listIssues distinguishes an empty set from a failed read (#85)', () =>
       return ''
     }
     const github = GitHubClient({
-      execFile: (cmd, args) => gh(args),
+      // Dispatch on `cmd`, not only on `args`. The refusal now carries #134's provenance witness, which
+      // runs a read-only local `git rev-parse --short HEAD`; reading args[1] alone filed that as a
+      // tracker WRITE and accused a refused claim of writing when it wrote nothing (#135).
+      execFile: (cmd, args) => (cmd === 'git' ? 'b4a725d\n' : gh(args)),
       repo: 'Sullux/pitcairn-portal',
     })
     const svc = CoordService({
@@ -451,6 +454,116 @@ it('a git read that fails or answers non-sha degrades to unknown and STILL refus
 
   const poisoned = await capClient({ ghReply: rows(3), gitReply: rows(3) })
     .c.listIssues({ state: 'all', limit: 3 })
+    .catch((e) => e)
+  assert.ok(
+    poisoned instanceof Error,
+    'a non-sha git reply swallowed the refusal',
+  )
+  assert.match(poisoned.message, /\[code @ unknown\]$/)
+  assert.ok(
+    !poisoned.message.includes('number'),
+    `a gh blob leaked into the provenance slot: ${poisoned.message}`,
+  )
+})
+
+// #135: the unreadable-output refusal is the sibling of everything above and shared none of its axis
+// discipline until now - one hardcoded sentence printed for all three axes, accusing the open set and
+// the scope gate on a closed or all read, and carrying no code witness either. Measured 12/12 cells at
+// b4a725d before this block existed. The same four degraded shapes this file already knows are reachable
+// (empty stdout, an html body, a warning line above valid JSON, truncated JSON) x the three axes gh
+// accepts. The four `open` cells are a regression pin on #85's wording, not new behaviour; the eight
+// non-open cells are the defect.
+const offAxisPhrases = [
+  'open-issue set',
+  'the OPEN set',
+  'scope gate',
+  'missed collision',
+]
+
+const degraded = [
+  ['empty stdout', ''],
+  ['an html error body', '<html>Server Error</html>'],
+  ['a warning line above valid json', 'warning: got 500 of 562\n[]'],
+  ['truncated json', '[{"number":1}'],
+]
+
+for (const state of ['open', 'closed', 'all']) {
+  for (const [name, reply] of degraded) {
+    it(`#135 an unreadable ${state}-axis read (${name}) speaks of the ${state} axis only`, async () => {
+      const { c, calls } = capClient({ ghReply: reply, gitReply: 'b4a725d\n' })
+      const error = await c.listIssues({ state }).catch((e) => e)
+      assert.ok(
+        error instanceof Error,
+        `a failed ${state} read came back as a value`,
+      )
+      // non-vacuity: the double must have been driven, or every cell below passes on a mock that never ran
+      assert.ok(calls.length > 0, 'the execFile seam was never traveled')
+      assert.match(error.message, new RegExp(`on the ${state} axis`))
+      assert.match(
+        error.message,
+        /UNKNOWN, not empty/,
+        'the refusal lost the sentence #85 was built to keep',
+      )
+      assert.match(
+        error.message,
+        /\[code @ b4a725d\]$/,
+        `the unreadable refusal carries no code witness, unlike its at-cap sibling: ${error.message}`,
+      )
+      if (state === 'open') {
+        assert.match(
+          error.message,
+          /empties the scope gate/,
+          'the open arm no longer names the failure mode it exists to prevent',
+        )
+        return
+      }
+      for (const phrase of offAxisPhrases) {
+        assert.ok(
+          !error.message.includes(phrase),
+          `a ${state}-axis read is being reported as someone else's set: accuses "${phrase}" in ${error.message}`,
+        )
+      }
+    })
+  }
+}
+
+it('#135 the closed arm states the sweep cost, which is the only cost a closed read has', async () => {
+  const { c } = capClient({ ghReply: '', gitReply: 'b4a725d\n' })
+  const error = await c.listIssues({ state: 'closed' }).catch((e) => e)
+  assert.match(
+    error.message,
+    /unattested-closure/,
+    `no sweep consequence: ${error.message}`,
+  )
+  assert.match(error.message, /confident zero/)
+})
+
+it('#135 the all arm names the split instead of picking a victim, mirroring #134', async () => {
+  const { c } = capClient({ ghReply: '<html>x</html>', gitReply: 'b4a725d\n' })
+  const error = await c.listIssues({ state: 'all' }).catch((e) => e)
+  assert.match(error.message, /BOTH axes/)
+  assert.match(error.message, /ONE axis/)
+  assert.ok(
+    !error.message.includes('CLOSED set'),
+    `all read as closed: ${error.message}`,
+  )
+})
+
+it('#135 a broken witness degrades to unknown and still refuses, on a non-open axis', async () => {
+  const thrown = await capClient({ ghReply: '', throwOnGit: true })
+    .c.listIssues({ state: 'closed' })
+    .catch((e) => e)
+  assert.ok(thrown instanceof Error, 'a failed git read swallowed the refusal')
+  assert.match(thrown.message, /\[code @ unknown\]$/)
+  assert.match(
+    thrown.message,
+    /on the closed axis/,
+    'the witness path lost the axis sentence',
+  )
+  assert.match(thrown.message, /closed-issue set is UNKNOWN/)
+
+  const poisoned = await capClient({ ghReply: '', gitReply: rows(3) })
+    .c.listIssues({ state: 'all' })
     .catch((e) => e)
   assert.ok(
     poisoned instanceof Error,

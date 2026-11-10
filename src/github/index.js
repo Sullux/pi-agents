@@ -300,14 +300,31 @@ const GitHubClient = ({
     // and each one emptied the collision set: empty stdout, an `<html>Server Error</html>` body,
     // truncated JSON, and - reachable with no catastrophe at all - one `warning:` line printed above
     // valid JSON, because `runGh` only throws on a nonzero exit and the parse then fails on the blob.
-    // A caller handed `[]` cannot tell "no open issues" from "the read failed", and `listLabels` below
-    // already states the rule this site broke: an unreadable read is UNKNOWN, not absent.
+    // A caller handed `[]` cannot tell "the open set is empty" from "the read failed" on ANY axis, and
+    // `listLabels` below already states the rule this site broke: an unreadable read is UNKNOWN, not absent.
     const text = String(raw ?? '').trim()
+    // #135: this refusal accused the OPEN set and the scope gate whatever `state` was asked for, so a
+    // closed or all read that got garbage back from gh told the operator about a set it never touched -
+    // the mis-attribution #131/#134 removed from the at-cap arm below, at its sibling site. Measured
+    // 12/12 cells at b4a725d (3 axes x 4 degraded shapes) before this change: no axis token, no witness.
+    // Each cost is stated in the terms of the caller that can actually reach it: the gate for `open`,
+    // the closure sweep for `closed`, both for anything else - so `all` names the split and asks for one.
+    const axisCost =
+      state === 'open'
+        ? 'The open-issue set is UNKNOWN, not empty: a silent [] here empties the scope gate and lets ' +
+          'every claim through, so this refuses instead.'
+        : state === 'closed'
+          ? 'The closed-issue set is UNKNOWN, not empty: a silent [] here hands the unattested-closure ' +
+            'sweep a confident zero over a read that failed, so it must read UNKNOWN and not clean, ' +
+            'and this refuses instead.'
+          : `The ${String(state).toUpperCase()}-issue set is UNKNOWN, not empty: state:'${state}' spans ` +
+            'BOTH axes, so a silent [] would empty the claim gate and read a failed closure sweep as ' +
+            "zero unattested at once. Retry on ONE axis ('open' or 'closed'); this refuses instead."
     const unreadable = (detail) =>
       new Error(
-        `coord: gh issue list returned unreadable output for ${activeRepo || 'the resolved repo'} - ${detail}. ` +
-          'The open-issue set is UNKNOWN, not empty: a silent [] here empties the scope gate and lets ' +
-          'every claim through, so this refuses instead.',
+        `coord: gh issue list returned unreadable output for ${activeRepo || 'the resolved repo'} on the ${state} axis - ${detail}. ` +
+          axisCost +
+          codeWitness(),
       )
     if (!text.startsWith('[')) {
       throw unreadable(
