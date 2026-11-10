@@ -1,5 +1,5 @@
 const { isMine, cleanAgent } = require('../coord/owner')
-const { tickState } = require('../coord/tick-state')
+const { tickState, closureShape } = require('../coord/tick-state')
 
 const NON_ACTIONABLE_LABELS = [
   'hub',
@@ -235,12 +235,13 @@ const scanUnattestedClosures = async ({
     const t = Date.parse(i.closedAt)
     return Number.isFinite(t) && t >= cutoff
   })
-  const unattested = inWindow
-    .map((i) => ({
-      number: i.number,
-      closedAt: i.closedAt,
-      state: tickState(i.body),
-    }))
+  const classified = inWindow.map((i) => ({
+    number: i.number,
+    closedAt: i.closedAt,
+    state: tickState(i.body),
+  }))
+  const byNewest = (a, b) => Date.parse(b.closedAt) - Date.parse(a.closedAt)
+  const unattested = classified
     .filter((r) => r.state.attestable && r.state.unticked > 0)
     .map((r) => ({
       number: r.number,
@@ -249,28 +250,56 @@ const scanUnattestedClosures = async ({
       unticked: r.state.unticked,
       boxes: r.state.boxes,
     }))
-    .sort((a, b) => Date.parse(b.closedAt) - Date.parse(a.closedAt))
+    .sort(byNewest)
+  // #114: the population #99 excluded is REPORTED, not dropped. Membership of `unattested` is
+  // unchanged - that is #99's ratified selectivity bar, and folding these in would accuse six
+  // legitimately-issued closures of missing evidence - but a reader of "3 unattested" could not
+  // previously tell "nothing was missing" from "6 of the 15 closures in the window were never
+  // eligible to appear" (measured at `f3a4e04`). The `unreadable-heading` shape is the loud one: it
+  // means tick boxes exist that the close guard could not see, which is a bypass rather than a style.
+  const unattestable = classified
+    .filter((r) => !r.state.attestable)
+    .map((r) => ({
+      number: r.number,
+      closedAt: r.closedAt,
+      shape: closureShape(r.state),
+    }))
+    .sort(byNewest)
+  const unreadableHeadings = unattestable.filter(
+    (r) => r.shape === 'unreadable-heading',
+  )
   const shown = unattested.slice(0, MAX_CLOSURE_LINES)
   const dropped = unattested.length - shown.length
   const summary =
     `${rows.length} closed issue(s) scanned, ` +
-    `${inWindow.length} closed within the last ${windowHours}h, ${unattested.length} unattested`
+    `${inWindow.length} closed within the last ${windowHours}h, ${unattested.length} unattested, ` +
+    `${unattestable.length} with no tick mechanism (not gaps: #99 ratified them)`
   const list = shown
     .map(
       (s) => `#${s.number} ${s.ticked}/${s.boxes} ticked, closed ${s.closedAt}`,
     )
     .join('; ')
   const tail = dropped > 0 ? ` (+${dropped} more, newest first)` : ''
+  // Appended to BOTH note branches. The bypass is precisely the state where nothing accuses: four real
+  // boxes under an unreadable heading leave `unattested` empty, so a warning that rode only the
+  // non-empty branch would be silent in exactly the case it exists to report (caught by the pin, not
+  // by reading - the red was `#114 WARNING` missing from a note that had a tier of two in it).
+  const headingWarning =
+    unreadableHeadings.length > 0
+      ? ` | #114 WARNING: ${unreadableHeadings.map((s) => `#${s.number}`).join(' ')} carry tick boxes under a Done-when heading the classifier cannot read, so \`coord done\` gated none of them - check those bodies before trusting their closes`
+      : ''
   return {
     readable: true,
     scanned: rows.length,
     inWindow: inWindow.length,
     windowHours,
     unattested,
+    unattestable,
     note:
-      unattested.length === 0
+      (unattested.length === 0
         ? `unattested-closure scan: ${summary}`
-        : `unattested-closure scan: ${summary} - ${list}${tail}: these closed without anyone ticking a Done-when box, and #94's guard only covers the verb, so tick each box with its measurement or annotate why it cannot be met`,
+        : `unattested-closure scan: ${summary} - ${list}${tail}: these closed without anyone ticking a Done-when box, and #94's guard only covers the verb, so tick each box with its measurement or annotate why it cannot be met`) +
+      headingWarning,
   }
 }
 
