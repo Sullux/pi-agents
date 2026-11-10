@@ -211,18 +211,22 @@ it('the at-cap refusal names the axis it was asked for, not the one the gate car
       'axis for a repo with four open issues',
   )
 
-  // #111: the two remedies and the collision maxim must NOT ride the closed arm, or the refusal tells the next
-  // operator to do the thing #107's rationale rejects - a bigger constant is the same cliff, longer.
-  for (const phrase of [
-    'larger options.limit',
-    'ISSUE_PAGE_CEILING',
-    'missed collision',
-  ]) {
+  // #111: the ceiling constant and the collision maxim must NOT ride the closed arm, or the refusal tells the next
+  // operator to do the thing #107's rationale rejects - a bigger SHARED constant is the same cliff, longer, and a
+  // sweep has no collision set. #113 amends this list: the PER-CALL limit is not a shared constant, it is the only
+  // knob left once the read already carries a predicate, and it is measured effective - a 90-day sweep of
+  // pitcairn refuses at the ceiling (500) and returns 558 rows at limit 1000 - so it belongs on both arms.
+  for (const phrase of ['ISSUE_PAGE_CEILING', 'missed collision']) {
     assert.ok(
       !closed.error.message.includes(phrase),
       `the closed-axis refusal still offers open-axis advice (${phrase}): ${closed.error.message}`,
     )
   }
+  assert.match(
+    closed.error.message,
+    /larger options\.limit/,
+    'the closed-axis refusal dropped the one remedy that measurably sweeps an at-cap repo',
+  )
 
   const open = await call(rows(3), { state: 'open', limit: 3 })
   assert.match(open.error.message, /on the open axis/)
@@ -233,4 +237,106 @@ it('the at-cap refusal names the axis it was asked for, not the one the gate car
   assert.match(open.error.message, /ISSUE_PAGE_CEILING/)
   assert.match(open.error.message, /larger options\.limit/)
   assert.match(open.error.message, /missed collision/)
+})
+
+// #113: the closed arm's surviving instruction was `pass options.search` - and the only caller that can ever reach
+// this refusal (preflight's closure sweep) ALWAYS passes that predicate, so the message advised a completed action
+// and hid the knobs that are actually left. A search-bearing read must name the predicate it used and stop telling
+// the operator to pass one; a search-FREE read must keep that advice, or the first half is satisfiable by deleting
+// the sentence from both branches - which is the shape this file exists to refuse.
+it('a search-bearing closed read at cap names the predicate it actually used, not one it already has', async () => {
+  const search = 'closed:>=2026-08-12T00:00:00Z'
+  const hit = await call(rows(3), { state: 'closed', limit: 3, search })
+  assert.ok(
+    hit.error,
+    'expected a throw at the cap on a search-bearing closed read',
+  )
+  assert.ok(
+    hit.error.message.includes(search),
+    `the refusal did not name the predicate the call already carries: ${hit.error.message}`,
+  )
+  assert.ok(
+    !hit.error.message.includes('pass options.search'),
+    `the refusal still advises passing a search the caller already passed: ${hit.error.message}`,
+  )
+  // the two knobs that remain: the window (a tighter bound) and the per-call limit.
+  assert.match(hit.error.message, /window/)
+  assert.match(hit.error.message, /larger options\.limit/)
+  for (const phrase of ['ISSUE_PAGE_CEILING', 'missed collision']) {
+    assert.ok(
+      !hit.error.message.includes(phrase),
+      `the search-bearing closed arm still offers open-axis advice (${phrase})`,
+    )
+  }
+  assert.ok(
+    !hit.error.message.includes('scope gate'),
+    'the search-bearing closed arm still accuses the claim gate',
+  )
+})
+
+it('a search-FREE closed read at cap keeps the server-side advice (so the arm above cannot delete it)', async () => {
+  const bare = await call(rows(3), { state: 'closed', limit: 3 })
+  assert.ok(
+    bare.error,
+    'expected a throw at the cap on a search-free closed read',
+  )
+  assert.match(
+    bare.error.message,
+    /pass options\.search/,
+    'a closed read with no predicate was not told to bound it server-side',
+  )
+  assert.match(bare.error.message, /larger options\.limit/)
+  assert.ok(
+    !bare.error.message.includes('scope gate'),
+    'the search-free closed arm still accuses the claim gate',
+  )
+})
+
+// #113 second half: `const limit = options.limit || ISSUE_PAGE_CEILING` silently reinterprets an explicit 0 as the
+// ceiling, and `parsed.length === limit` is then vacuously true at 0 - so a caller that means "no limit" receives an
+// at-cap refusal telling it to pass a larger limit, which is the value it already passed. gh itself rejects
+// --limit 0 (measured: it errors and returns no rows), so the argv never carried a 0 and the fallback lives inside
+// listIssues, not in gh. null and undefined must keep meaning "use the ceiling": preflight passes
+// CLOSE_SCAN_LIMIT (null) on purpose.
+it('an explicit limit of 0 is refused as a misuse, not silently reinterpreted as the ceiling', async () => {
+  for (const bad of [0, -1, 2.5, 'x']) {
+    const { c, argv } = client(rows(1))
+    let error
+    try {
+      await c.listIssues({ state: 'closed', limit: bad })
+    } catch (err) {
+      error = err
+    }
+    assert.ok(
+      error,
+      `listIssues accepted options.limit = ${JSON.stringify(bad)} without complaint`,
+    )
+    assert.match(
+      error.message,
+      /options\.limit/,
+      `the refusal for ${JSON.stringify(bad)} does not name the argument it rejected`,
+    )
+    assert.ok(
+      !error.message.includes('TRUNCATED'),
+      `${JSON.stringify(bad)} produced a truncation refusal instead of a misuse refusal`,
+    )
+    assert.equal(
+      argv.length,
+      0,
+      `listIssues spawned gh despite an invalid limit (${JSON.stringify(bad)})`,
+    )
+  }
+  const omitted = await call(rows(1), { state: 'closed', limit: null })
+  assert.equal(
+    omitted.error,
+    undefined,
+    'a null limit should fall back to the ceiling, not refuse',
+  )
+  const list = omitted.argv[omitted.argv.length - 1]
+  const at = list.indexOf('--limit')
+  assert.equal(
+    Number(list[at + 1]),
+    ISSUE_PAGE_CEILING,
+    'a null limit did not reach gh as the ceiling',
+  )
 })

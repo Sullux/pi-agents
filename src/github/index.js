@@ -176,7 +176,24 @@ const GitHubClient = ({
 
   const listIssues = async (options = {}) => {
     const state = options.state || 'open'
-    const limit = options.limit || ISSUE_PAGE_CEILING
+    // #113: `|| ISSUE_PAGE_CEILING` read an explicit 0 as "not given", and the at-cap guard below compares the reply
+    // length to THIS number - so limit 0 fell through to 500 and then refused at exactly 500, telling the caller to
+    // pass a larger options.limit, which is the value it had already passed. gh rejects --limit 0 outright (measured:
+    // it errors and returns no rows), so a 0 in the argv is never the failure; the reinterpretation is here. null and
+    // undefined keep meaning "use the ceiling" because that is what preflight's CLOSE_SCAN_LIMIT passes on purpose.
+    if (
+      options.limit !== undefined &&
+      options.limit !== null &&
+      !(Number.isInteger(options.limit) && options.limit > 0)
+    ) {
+      throw new Error(
+        `coord: gh issue list was given options.limit = ${JSON.stringify(options.limit)}, which is not a positive ` +
+          `integer. 0 is not "unlimited" on this box (gh rejects --limit 0), and the at-cap guard compares the number ` +
+          `of rows to this value, so a 0 would read as truncation on an empty page. Pass a positive integer, or omit ` +
+          `options.limit (or pass null) to use the ceiling (${ISSUE_PAGE_CEILING}). Nothing was run.`,
+      )
+    }
+    const limit = options.limit ?? ISSUE_PAGE_CEILING
     const argv = [
       'issue',
       'list',
@@ -235,16 +252,35 @@ const GitHubClient = ({
       // closed arm offers only the bound that works there and states the stakes of a sweep, not of a claim gate.
       const repoName = activeRepo || 'the resolved repo'
       const lead = `coord: gh issue list returned exactly ${limit} issues on the ${state} axis for ${repoName}, `
+      // #113: the closed arm told every operator to "pass options.search" - and the one caller that can ever reach
+      // this refusal (preflight's unattested-closure sweep) always passes that predicate, so the sentence advised a
+      // completed action and hid the two knobs still in play. Name the bound the call actually used when there is
+      // one; keep the advice when there is not. A per-call options.limit is offered on BOTH arms because it is not
+      // the shared ceiling constant #111 correctly removed: measured on pitcairn, the same 90-day window refuses at
+      // 500 and returns 558 rows at 1000.
+      const boundedSearch =
+        typeof options.search === 'string' && options.search.trim()
+          ? options.search.trim()
+          : ''
+      const sweepStakes =
+        ' An unreadable sweep reads as UNKNOWN, which is honest; a confident zero off a truncated page is not.'
       throw new Error(
         state === 'open'
           ? lead +
               'so the OPEN set is TRUNCATED and the tail is invisible to the scope gate - raise ' +
               `ISSUE_PAGE_CEILING (currently ${ISSUE_PAGE_CEILING}) or pass a larger options.limit. ` +
               'A missed collision is worse than a refused claim.'
-          : lead +
-              'so the CLOSED set is TRUNCATED and this read cannot be swept at all - bound it ' +
-              'server-side (pass options.search, e.g. closed:>=<UTC date>). An unreadable sweep reads ' +
-              'as UNKNOWN, which is honest; a confident zero off a truncated page is not.',
+          : boundedSearch
+            ? lead +
+              'so the CLOSED set is TRUNCATED and this read cannot be swept at all. The read already carries ' +
+              `a server-side bound (${boundedSearch}), so the knobs left are a tighter window and a larger ` +
+              'options.limit (per-call, not the shared ceiling).' +
+              sweepStakes
+            : lead +
+              'so the CLOSED set is TRUNCATED and this read cannot be swept at all - bound it server-side ' +
+              '(pass options.search, e.g. closed:>=<UTC date>), narrow the window, or pass a larger ' +
+              'options.limit (per-call, not the shared ceiling).' +
+              sweepStakes,
       )
     }
     return parsed
