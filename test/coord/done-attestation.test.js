@@ -46,6 +46,11 @@ const UNATTENDED =
 const ALL_TICKED = '## Done when\n- [x] one\n- [x] two\n'
 const NUMBERED_ONLY = '## Done when\n1. first\n2. second\n'
 const NO_SECTION = '## Goal\ng\n\n## Files\nsrc/foo.js\n'
+// #120: the shape `tickState` cannot see. Four unticked boxes, all real, under a heading the
+// classifier does not parse - pitcairn writes `## Done-when` constantly, which is why #114's own
+// census measured the variant population rather than inventing it.
+const VARIANT_HEADING =
+  '## Goal\ng\n\n## Done-when\n- [x] one\n- [ ] two\n- [ ] three\n- [ ] four\n\n## Files\nsrc/foo.js\n'
 
 describe('done (close requires an attestation, #94)', () => {
   it('refuses to close while boxes stay unticked and names the exact counts', async () => {
@@ -101,6 +106,65 @@ describe('done (close requires an attestation, #94)', () => {
     assert.match(
       commented[0].text,
       /unattested: 2\/3 \| forced over unticked boxes/,
+    )
+  })
+
+  // #120: the close path never RAN the orphan branch `unattestedNote` already had. These two arms are
+  // a pair by design - one drives the variant heading, the other freezes the canonical one byte for
+  // byte, so a fix that widens the note cannot quietly change what every existing DONE line means.
+  it('names orphan tick lines on the DONE line when the Done-when heading is unreadable (#120)', async () => {
+    // `## Done-when` is pitcairn's own habit and `tickState` reads only `^## Done when`, so four real
+    // unticked boxes classify as attestable=false, boxes=0, unticked=0, orphanBoxes=4.
+    const { coord, commented, closed } = build(VARIANT_HEADING)
+    const res = await coord.done(50, {})
+    assert.equal(
+      res.ok,
+      true,
+      '#99 ratified that a box-less close does not refuse',
+    )
+    assert.equal(closed.length, 1)
+    assert.match(
+      commented[0].text,
+      /unattested: 0\/0 \+ 4 tick line\(s\) no Done-when heading could attribute/,
+      'the fired-proof is the COUNT in the posted comment, not a flag beside it',
+    )
+    assert.match(
+      commented[0].text,
+      /boxes the guard could not attribute \(unreadable Done-when heading, #120\)/,
+      'and the wording blames the classifier, not the author - a bypass and laziness are different facts',
+    )
+    assert.equal(
+      res.unattested,
+      0,
+      'unticked stays 0 because the guard genuinely saw none - this field must not absorb the orphan count',
+    )
+    assert.equal(
+      res.unattributedBoxes,
+      4,
+      'the sibling field is the one that carries it',
+    )
+  })
+
+  it('leaves the canonical-heading DONE line byte-identical (the control arm)', async () => {
+    const { coord, commented } = build(UNATTENDED)
+    await coord.done(50, {
+      text: 'measured at ad03d2c: 487/487/0, all three boxes verified',
+    })
+    const first = commented[0].text
+    assert.ok(
+      first.includes(' | unattested: 2/3 | evidence in message'),
+      'fixture sanity',
+    )
+    // the shipped form at pi-agents `36dc870`, minus the `at:` which the injected clock fixes
+    assert.equal(
+      first.split('\n\n')[0],
+      '**DONE** | agent: agent-delta | at: 1700000000000 | unattested: 2/3 | evidence in message',
+      'the canonical close is frozen byte for byte',
+    )
+    assert.equal(
+      first.includes('could not attribute'),
+      false,
+      'an attributable close must not acquire the orphan clause',
     )
   })
 

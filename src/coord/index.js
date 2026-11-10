@@ -539,9 +539,25 @@ const CoordService = ({
 
     // which path was taken stays visible in the record: a close over unticked boxes is the event an
     // auditor looks for afterwards, and a forced one is the worse variant of it.
+    //
+    // #120: the second half of that sentence was unreachable until now. `closingUnattested` is
+    // `attestable && unticked > 0`, and `attestable` is `boxes > 0` where `boxes` only counts lines
+    // inside a PARSED section - so a body whose heading reads `## Done-when` (the variant pitcairn
+    // uses constantly, and the shape #114's sweep names `unreadable-heading`) yields
+    // attestable=false, closingUnattested=false, tickNote='', and the orphan branch of
+    // `unattestedNote` - which #116 shipped and #114 measured at 4 tick lines in exactly that state -
+    // had no live caller on the close path. The DONE line is the append-only witness an auditor
+    // greps; reading clean in a state the guard cannot SEE is the failure mode #94 exists to close.
+    //
+    // Wording keeps the two facts APART, because they carry different blame: unticked boxes are
+    // laziness the author chose, orphan tick lines are a heading the classifier could not attribute.
+    // A reader must not have to re-derive which one happened.
+    const orphan = ticks.orphanBoxes > 0
     const tickNote = closingUnattested
       ? ` | ${unattestedNote(ticks)} | ${force ? 'forced over unticked boxes' : 'evidence in message'}`
-      : ''
+      : orphan
+        ? ` | ${unattestedNote(ticks)} | boxes the guard could not attribute (unreadable Done-when heading, #120)`
+        : ''
     // #96: the other override deserves the same treatment - "who else's completion did this close
     // land on top of" is exactly the line an auditor greps for after a false-lineage report.
     const fenceNote =
@@ -580,6 +596,13 @@ const CoordService = ({
       forcedOverDone: fence && force ? fence.agent : '',
       // #94: same reasoning one field over - the count is what a later reader greps for
       unattested: closingUnattested ? ticks.unticked : 0,
+      // #120: a SIBLING field, deliberately not folded into `unattested`. The two counts answer
+      // different questions - "how many boxes did the author leave unticked" and "how many tick
+      // lines was the guard blind to" - and one number holding both would let a bypass and a
+      // classifier gap look identical to anything downstream that reads the return value. Arm B
+      // used to report `unattested: 0` for a body carrying 4 real tick lines, which is the silent
+      // version of the same hole the note was.
+      unattributedBoxes: orphan ? ticks.orphanBoxes : 0,
     }
   }
 
