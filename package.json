@@ -6,6 +6,9 @@
     "page": "./bin/page"
   },
   "main": "src/index.js",
+  "devDependencies": {
+    "prettier": "3.9.6"
+  },
   "scripts": {
     "test": "node --test 'test/**/*.test.js'"
   },
