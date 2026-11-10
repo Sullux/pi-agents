@@ -531,3 +531,76 @@ test('#106 box 3: a double with NO state field behaves as open - the guard fires
     assert.notEqual(res.ok, false, `${verb}: undefined state is not a refusal`)
   }
 })
+
+// #119: two sentences in `src/coord/index.js`'s guard comment were invisible to every arm above, so a
+// future edit could break both while this file stayed green. Measured at `9784b072` before these arms
+// existed: neutering the state branch reddened exactly 2 of the 21 arms in this file plus
+// `test/github/github.test.js` (box 1 and the #1218 replay), while BOTH of the mutations below —
+// reordering the two checks, and threading `--force` into the state test — left all 21 green. Neither
+// green was the code being right; it was the fixture population. The scan that showed it: `state:` is
+// passed at 3 sites in this file (box 1, box 2's OPEN control, the #1218 replay), and a brace-balanced
+// sweep of main's copy for a literal carrying `state:` AND `isPullRequest: true` returned 0.
+
+test('#119 arm 1: a double that is BOTH a pull request and CLOSED gets the PULL-REQUEST diagnosis, so the kind-first ordering is load-bearing', async () => {
+  // This is the artifact that caused the original #30 accident: a MERGED PR. Measured against the live
+  // API it arrives as `state=closed` with `state_reason = null` (pi-agents #112), which is why this
+  // fixture omits `stateReason` - and why the ordering matters more than it looks. `closedRefusal`
+  // interpolates the reason only when truthy, so if the state check were allowed to run first, a
+  // merged PR would be told "is CLOSED, not open": the wrong kind AND no reason, strictly less
+  // information than the guard is capable of giving.
+  const github = recorder({
+    isPullRequest: true,
+    state: 'CLOSED',
+  })
+  const results = await callEach(github)
+  assert.equal(results.length, 5)
+  for (const [verb, res] of results) {
+    assert.equal(
+      res.ok,
+      false,
+      `${verb}: a PR number is refused whichever state it carries`,
+    )
+    assert.match(
+      res.error,
+      /is a PULL REQUEST/,
+      `${verb}: the kind diagnosis wins, because it is the more specific one`,
+    )
+    assert.doesNotMatch(
+      res.error,
+      /is CLOSED/,
+      `${verb}: the state check must not be reached first - this is the arm the ordering needs`,
+    )
+  }
+  assert.deepEqual(github.writes, [], 'and the refusal still writes nothing')
+})
+
+test('#119 arm 2: done --force against a CLOSED target still refuses - "force does NOT override" becomes falsifiable', async () => {
+  // The comment promises this to whoever next "optimises" the guard, and nothing above could see a
+  // violation: `force` appears 0 times in the #106 arms, and threading `&& !force` through the state
+  // test kept every arm green, because no arm ever calls `done` with force on. `--force` means "close
+  // it even though the Done-when boxes are unticked" (#34); it has no reading in which it should also
+  // mean "the target is not a live board artifact".
+  const github = recorder({
+    isPullRequest: false,
+    state: 'CLOSED',
+    stateReason: 'COMPLETED',
+  })
+  const coord = serviceOver(github)
+  const res = await coord.done(21, { force: true })
+  assert.equal(
+    res.ok,
+    false,
+    'force skips the tick check, it does not skip the state check',
+  )
+  assert.match(
+    res.error,
+    /#21 is CLOSED \(COMPLETED\)/,
+    'same refusal, same advice',
+  )
+  assert.match(res.error, /Nothing was written/)
+  assert.deepEqual(
+    github.writes,
+    [],
+    'the proof is the CALL LIST: no protocol comment, no label, no close under --force',
+  )
+})
