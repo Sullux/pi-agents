@@ -383,6 +383,9 @@ const Cli = ({
       // (measured: 2h13m old, 8 merges behind), and that is a per-cycle reading.
       const runner = Runner({
         codeCurrency,
+        // #133: same injected instance the `page runners` verb uses (constructed once above, with the
+        // real seams) - threaded to the advice composer so provenance rides the report, not a prompt.
+        runnerCurrency,
         github,
         agent,
         project,
