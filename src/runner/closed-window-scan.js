@@ -123,7 +123,7 @@ const scanClosedWindow = async ({
     const accepted = (rows || []).filter((row) => inWindow(row, sliceFrom, sliceTo))
     // The Map key is what collapses a row that two adjacent slices both see (each slice's day floor covers it);
     // the `has` guard only preserves first-seen content, which identical rows cannot express. Key choice, not the
-    // guard, is load-bearing - probe PX148P3b reddens the union arm by keying on the slice instead.
+    // guard, is load-bearing - discrimination run reddens the union arm by keying on the slice instead.
     for (const row of accepted) if (!seen.has(row.number)) seen.set(row.number, row)
     slices.push({
       bisected: false,
