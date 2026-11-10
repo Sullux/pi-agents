@@ -721,10 +721,10 @@ describe('Runner: unattested-closure scan (#99)', () => {
     const closed = [
       { number: 31, closedAt: closedAtInside, body: CLOSE_BODY_UNTICKED },
     ]
-    const build = (openIssues) => ({
+    const build = (openIssues, prs = []) => ({
       listIssues: async (options = {}) =>
         (options.state || 'open') === 'closed' ? closed : openIssues,
-      listPrs: async () => [],
+      listPrs: async () => prs,
     })
     const unclaimed = await checkBacklogAvailability({
       github: build([{ number: 40, labels: [], comments: [], body: '' }]),
@@ -751,6 +751,42 @@ describe('Runner: unattested-closure scan (#99)', () => {
     assert.ok(
       owned.closures?.note.includes('#31'),
       'owned_claims carries the scan too',
+    )
+
+    // #103: the title of this arm promised EVERY dispatch-ready path and shipped two of three, which is how
+    // the `open_prs` wiring survived a merge with two approvals on it - deleting that `closures,` line left
+    // the full lane at 520/520. The two states below are what makes the sentence true.
+    const peersOwnEverything = [
+      {
+        number: 42,
+        labels: [{ name: 'status:claimed' }],
+        comments: [{ body: '**CLAIM** | agent: agent-bravo' }],
+      },
+    ]
+    const openPr = await checkBacklogAvailability({
+      github: build(peersOwnEverything, [
+        { number: 700, headRefOid: 'abc1234567890' },
+      ]),
+      agent: 'alpha',
+      now: () => NOW,
+    })
+    assert.equal(openPr.reason, 'open_prs')
+    assert.ok(
+      openPr.closures?.note.includes('#31'),
+      'open_prs carries the scan - the state most of the fleet sits in during a wave',
+    )
+
+    // and the wait path: the scan runs before the branch checks, so peer_contention has already paid for
+    // the read. Dropping it discarded a result rather than avoiding a call.
+    const contention = await checkBacklogAvailability({
+      github: build(peersOwnEverything, []),
+      agent: 'alpha',
+      now: () => NOW,
+    })
+    assert.equal(contention.reason, 'peer_contention')
+    assert.ok(
+      contention.closures?.note.includes('#31'),
+      'peer_contention carries the scan it already paid for',
     )
   })
 
