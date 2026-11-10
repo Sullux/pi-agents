@@ -340,3 +340,125 @@ it('an explicit limit of 0 is refused as a misuse, not silently reinterpreted as
     'a null limit did not reach gh as the ceiling',
   )
 })
+
+// #131: the six-call matrix that settled a two-turn argument about a stale emitter. Both arms are
+// about the refusal's OWN truth conditions: which axis it accuses, and whether a reader can tell
+// which code printed it. The `all` axis is reachable through gh's `--state all`, so this is not a
+// typo-shaped edge case - and before the fix an `all` read printed `on the all axis` in its lead and
+// then "the CLOSED set is TRUNCATED" in its tail, measured live at 1fbea98.
+//
+// The shared `client()` double answers EVERY command with one blob, which for a git `rev-parse` is
+// not a sha - so these arms use their own cmd-aware double. That is also the point of the third arm:
+// a witness that cannot be believed must degrade to `unknown`, never poison the message with a gh
+// reply and never swallow the refusal itself.
+const capClient = ({ ghReply, gitReply, throwOnGit = false }) => {
+  const calls = []
+  const c = GitHubClient({
+    execFile: (cmd, args) => {
+      calls.push([cmd, ...args])
+      if (cmd === 'git') {
+        if (throwOnGit) throw new Error('git: not a repository')
+        return gitReply
+      }
+      return typeof ghReply === 'function' ? ghReply() : ghReply
+    },
+    repo: 'Sullux/pitcairn-portal',
+  })
+  return { c, calls }
+}
+
+const atCap = (state, extra = {}) => {
+  const { c, calls } = capClient({ ghReply: rows(3) })
+  return c
+    .listIssues({ state, limit: 3, ...extra })
+    .then(() => ({ error: undefined, calls }))
+    .catch((error) => ({ error, calls }))
+}
+
+it('a state that is neither open nor closed accuses its OWN axis, never the CLOSED set', async () => {
+  const { error } = await atCap('all', {
+    search: 'closed:>=2026-08-12T00:00:00Z',
+  })
+  assert.ok(error, 'expected a throw at the cap on the all axis')
+  assert.match(error.message, /on the all axis/)
+  assert.match(error.message, /ALL set is TRUNCATED/)
+  assert.match(
+    error.message,
+    /BOTH axes/,
+    `the all arm never tells the operator what state:'all' actually spans: ${error.message}`,
+  )
+  // the defect this arm exists to keep dead
+  assert.ok(
+    !error.message.includes('CLOSED set'),
+    `an all-axis read is being reported as a closed set again: ${error.message}`,
+  )
+  // #111's negative blocks extend to the third axis: this is not a claim gate and not a ceiling knob
+  for (const phrase of [
+    'ISSUE_PAGE_CEILING',
+    'missed collision',
+    'scope gate',
+  ]) {
+    assert.ok(
+      !error.message.includes(phrase),
+      `the all-axis arm still carries open-axis advice (${phrase}): ${error.message}`,
+    )
+  }
+  assert.match(error.message, /larger options\.limit/)
+})
+
+it('open and closed keep their own arms, so the all-axis fix cannot be a rewrite of all three', async () => {
+  const open = await atCap('open', { search: 'is:issue' })
+  assert.match(open.error.message, /OPEN set is TRUNCATED/)
+  assert.match(open.error.message, /scope gate/)
+  const closed = await atCap('closed', { search: 'closed:>=2026-08-12' })
+  assert.match(closed.error.message, /CLOSED set is TRUNCATED/)
+  assert.ok(
+    !closed.error.message.includes('BOTH axes'),
+    'the both-axes sentence leaked onto the closed arm',
+  )
+})
+
+it('the refusal carries the sha it was built from, and the git seam is proven traveled', async () => {
+  const { c, calls } = capClient({ ghReply: rows(3), gitReply: '6b045dd\n' })
+  let thrown
+  try {
+    await c.listIssues({ state: 'all', limit: 3 })
+  } catch (err) {
+    thrown = err
+  }
+  assert.ok(thrown, 'expected the at-cap refusal to throw')
+  assert.match(
+    thrown.message,
+    /\[code @ 6b045dd\]$/,
+    `the witness did not carry the sha the injected git answered: ${thrown.message}`,
+  )
+  assert.ok(
+    calls.some(([cmd, ...args]) => cmd === 'git' && args.includes('rev-parse')),
+    'the provenance was printed without ever traveling the git seam - a decoration, not a witness',
+  )
+})
+
+it('a git read that fails or answers non-sha degrades to unknown and STILL refuses', async () => {
+  // The refusal is the deliverable. Two ways the witness can be worthless: no git at all, and the
+  // shape the shared double produces - a gh payload handed back for a rev-parse. Neither may turn
+  // into a second error, a swallowed throw, or a message whose sha is really a JSON blob.
+  const broken = await capClient({ ghReply: rows(3), throwOnGit: true })
+    .c.listIssues({ state: 'all', limit: 3 })
+    .catch((e) => e)
+  assert.ok(broken instanceof Error, 'a failed git read swallowed the refusal')
+  assert.match(broken.message, /\[code @ unknown\]$/)
+  assert.match(broken.message, /ALL set is TRUNCATED/)
+
+  const poisoned = await capClient({ ghReply: rows(3), gitReply: rows(3) })
+    .c.listIssues({ state: 'all', limit: 3 })
+    .catch((e) => e)
+  assert.ok(
+    poisoned instanceof Error,
+    'a non-sha git reply swallowed the refusal',
+  )
+  assert.match(poisoned.message, /\[code @ unknown\]$/)
+  assert.ok(
+    !poisoned.message.includes('number'),
+    `a gh blob leaked into the provenance slot: ${poisoned.message}`,
+  )
+})

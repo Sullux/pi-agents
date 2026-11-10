@@ -111,6 +111,31 @@ const GitHubClient = ({
         'GitHub remote.',
     )
 
+  // #131 second half: the ceiling refusal named no code, so a message emitted by a process that
+  // loaded pre-#111 bytes was indistinguishable from a defect in the current tree, and the fleet
+  // argued about that twice before a six-call matrix settled it. Read through the same injected
+  // seam as every other external call, and deliberately NOT load-bearing: any answer that is not a
+  // hex sha (a fake exec, no git, a tarball) degrades to `unknown` and the refusal still throws
+  // with its full axis sentence. Note what the witness can and cannot claim - it names the TREE the
+  // process is standing in, not the bytes it loaded at require time; a tree that moved after boot
+  // prints a ref newer than its own code, which is why #125's advice note keeps its own wording.
+  const codeWitness = () => {
+    let ref = 'unknown'
+    try {
+      const raw = String(
+        execFile('git', ['rev-parse', '--short', 'HEAD'], {
+          cwd,
+          encoding: 'utf8',
+          maxBuffer: 64 * 1024,
+        }) ?? '',
+      ).trim()
+      if (/^[0-9a-f]{7,40}$/.test(raw)) ref = raw
+    } catch {
+      // no git on the box, or an exec double that only answers gh: the witness is decoration
+    }
+    return ` [code @ ${ref}]`
+  }
+
   const runGh = (args = []) => {
     if (!activeRepo) throw noRepoError()
     const fullArgs = [...args, '--repo', activeRepo]
@@ -322,23 +347,47 @@ const GitHubClient = ({
           : ''
       const sweepStakes =
         ' An unreadable sweep reads as UNKNOWN, which is honest; a confident zero off a truncated page is not.'
+      // #131 first half: this split was `open` vs `not open`, so a `state:'all'` read - which gh
+      // accepts, and which a census uses - printed its own lead as `on the all axis` and then had
+      // the tail accuse the CLOSED set and advise a `closed:>=` predicate for a set that is not
+      // closed-only. Measured live at 1fbea98 across a six-call matrix. `all` gets its own arm: it
+      // names the axis that was asked for, tells the operator to pick ONE axis first, and keeps the
+      // bound/tighten/raise-per-call remedies that work on either axis. #111's negative blocks still
+      // hold on it: no ISSUE_PAGE_CEILING, no `missed collision`, no `scope gate`.
+      const boundNote = boundedSearch
+        ? `The read already carries a server-side bound (${boundedSearch}), so the knobs left are a tighter window and a larger options.limit (per-call, not the shared ceiling).`
+        : 'Bound it server-side (options.search, e.g. closed:>=<UTC date> or is:issue), narrow the window, or pass a larger options.limit (per-call, not the shared ceiling).'
+      const openArm =
+        lead +
+        'so the OPEN set is TRUNCATED and the tail is invisible to the scope gate - raise ' +
+        `ISSUE_PAGE_CEILING (currently ${ISSUE_PAGE_CEILING}) or pass a larger options.limit. ` +
+        'A missed collision is worse than a refused claim.'
+      const closedArm =
+        lead +
+        `so the CLOSED set is TRUNCATED and this read cannot be swept at all. ${boundNote}` +
+        sweepStakes
+      const unboundedClosedArm =
+        lead +
+        'so the CLOSED set is TRUNCATED and this read cannot be swept at all - bound it server-side ' +
+        '(pass options.search, e.g. closed:>=<UTC date>), narrow the window, or pass a larger ' +
+        'options.limit (per-call, not the shared ceiling).' +
+        sweepStakes
+      const bothAxesArm =
+        lead +
+        `so the ${String(state).toUpperCase()} set is TRUNCATED and this read cannot be swept at all - ` +
+        `state:'${state}' spans BOTH axes, so pick one (state:'open' or 'closed') before bounding it. ` +
+        boundNote +
+        sweepStakes
       throw new Error(
-        state === 'open'
-          ? lead +
-              'so the OPEN set is TRUNCATED and the tail is invisible to the scope gate - raise ' +
-              `ISSUE_PAGE_CEILING (currently ${ISSUE_PAGE_CEILING}) or pass a larger options.limit. ` +
-              'A missed collision is worse than a refused claim.'
+        (state === 'open'
+          ? openArm
           : boundedSearch
-            ? lead +
-              'so the CLOSED set is TRUNCATED and this read cannot be swept at all. The read already carries ' +
-              `a server-side bound (${boundedSearch}), so the knobs left are a tighter window and a larger ` +
-              'options.limit (per-call, not the shared ceiling).' +
-              sweepStakes
-            : lead +
-              'so the CLOSED set is TRUNCATED and this read cannot be swept at all - bound it server-side ' +
-              '(pass options.search, e.g. closed:>=<UTC date>), narrow the window, or pass a larger ' +
-              'options.limit (per-call, not the shared ceiling).' +
-              sweepStakes,
+            ? state === 'closed'
+              ? closedArm
+              : bothAxesArm
+            : state === 'closed'
+              ? unboundedClosedArm
+              : bothAxesArm) + codeWitness(),
       )
     }
     return parsed
