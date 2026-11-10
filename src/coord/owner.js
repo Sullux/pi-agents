@@ -138,7 +138,8 @@ const unresolvedProtocolLines = (comments = []) =>
 //   RELEASE by X, or unattributed -> fence lifted (the completer retracts their own completion;
 //       a third party cannot retract someone else's - they can only ask, and their own claim becomes
 //       possible once the holder releases)
-//   CLAIM / HANDOFF / anything else -> leave the fence ALONE: a CLAIM that landed after a DONE is
+//   HANDOFF naming me -> protects me, exactly like a prior CLAIM (see the #100 clause below);
+//       any other line -> leave the fence ALONE: a CLAIM that landed after a DONE is
 //       itself the bug this closes and must not launder into an excuse
 //   the fence never blocks its own poster: re-closing your own completed issue is routine.
 //   #28 UNION (this is the forward-port #96's sequencing line predicted): a PRIOR LIVE CLAIM by
@@ -151,6 +152,23 @@ const unresolvedProtocolLines = (comments = []) =>
 //       arm in test/coord/claim-stale-timeline.test.js is exactly that case), falling back to line
 //       position only when a stamp is missing. Releasing my own claim re-arms the fence: once I
 //       stand down, the completion is the only surviving word on the work.
+//   A HANDOFF naming me is a live hold for THIS rule too (bravo's ask on PR #100, decided here
+//       rather than left implicit): `applyMarker` already counts a handoff as ownership, so an agent
+//       handed an issue who then finds a bystander's DONE on it is the holder by the same evidence
+//       the board projects. Fencing them while protecting a CLAIMer is the asymmetry that makes
+//       `--force` the only exit for a legitimate close, so both routes set the same protection
+//       state. The dissenting reading - a DONE is a stronger record than a handoff - is why this is
+//       written down rather than merely coded: to fence handoffs, change this clause and its arm
+//       together, not the code alone.
+//   The stamp fallback reads BOTH comment shapes, because there are two: `viewIssue` is GraphQL and
+//       delivers `createdAt` as an ISO string, while REST callers and the fixtures deliver
+//       `created_at`, sometimes already numeric. A `created_at`-only fallback is inert on the
+//       transport that matters - measured by bravo at PR #100, where arm 9 pinned a field production
+//       never sends. The fallback COERCES to ms rather than passing the string through: the ordering
+//       rule below compares numbers, and a raw ISO stamp would make `myClaimAt < at` false by NaN
+//       coercion, which reads as "my claim was later" and strips protection from the rightful
+//       holder. A live DONE with no stamp at all still fences; only the ORDER defaults to the
+//       claimant, which is the safe direction.
 const completedByOther = (comments = [], agent = '') => {
   const clean = cleanAgent(agent)
   let fence = null
@@ -170,10 +188,29 @@ const completedByOther = (comments = [], agent = '') => {
     const who = agentOf(body)
     const stamped = () => {
       const m = body.match(/\|\s*at:\s*(\d+)/)
-      return m ? Number(m[1]) : (c.created_at ?? null)
+      if (m) return Number(m[1])
+      // GraphQL (`gh issue view --json comments`) delivers `createdAt` as an ISO string; REST and
+      // the fixtures deliver `created_at`, sometimes already a number. Reading only `created_at`
+      // made the fallback dead in production (bravo's ask on PR #100), and returning the raw string
+      // would have made every ordering compare below a NUMBER vs a STRING - `1700000009000 <
+      // '2026-11-10T04:00:00Z'` is false because the string coerces to NaN, which silently flips
+      // the #28 protection the other way. Normalize to ms so ordering means what it says.
+      const raw = c.createdAt ?? c.created_at ?? null
+      if (raw == null) return null
+      if (typeof raw === 'number') return raw
+      const parsed = Date.parse(raw)
+      return Number.isNaN(parsed) ? null : parsed
     }
     if (kind === 'CLAIM') {
       if (clean && who === clean) {
+        myClaimAt = stamped()
+        myClaimIdx = idx
+      }
+      continue
+    }
+    if (kind === 'HANDOFF') {
+      // a handoff TO me is the live hold `applyMarker` already honors; see the rules block
+      if (clean && targetOf(body) === clean) {
         myClaimAt = stamped()
         myClaimIdx = idx
       }

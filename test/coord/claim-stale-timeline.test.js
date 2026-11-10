@@ -17,6 +17,8 @@ const claimLine = (agent, at = 1699999000000) =>
   `**CLAIM** | agent: agent-${agent} | at: ${at}`
 const releaseLine = (agent = '', reason = 'rework') =>
   `**RELEASE**${agent ? ` | agent: agent-${agent}` : ''} | reason: ${reason}`
+const handoffLine = (to, from = 'c', at = 1699999500000) =>
+  `**HANDOFF** | agent: agent-${from} | to: agent-${to} | at: ${at}`
 const asComments = (bodies) => bodies.map((body) => ({ body }))
 
 describe('completedByOther (the #96 fence predicate)', () => {
@@ -113,6 +115,70 @@ describe('completedByOther (the #96 fence predicate)', () => {
         'b',
       ),
       null,
+    )
+  })
+
+  it('a HANDOFF to me protects the close, the same way a prior CLAIM does (bravo ask 2)', () => {
+    // The asymmetry bravo named: `applyMarker` counts a handoff as ownership, but the fence read
+    // only CLAIM, so the agent who was HANDED the issue was fenced by a bystander's DONE while a
+    // CLAIMer in the identical position was protected - and because the fence runs before #28's
+    // ownership branch in `done`, `--force` was the only exit. Both arms below are load-bearing:
+    // the first says the semantics, the second says a handoff to SOMEONE ELSE is not a hold on me.
+    assert.equal(
+      completedByOther(
+        asComments([handoffLine('b'), doneLine('a', 1700000003000)]),
+        'b',
+      ),
+      null,
+      'handed the issue, then a bystander closed it: still mine to close',
+    )
+    assert.equal(
+      completedByOther(
+        asComments([handoffLine('d'), doneLine('a', 1700000003000)]),
+        'b',
+      )?.agent,
+      'a',
+      'a handoff to a third party must not protect me - this is the arm that stops the rule widening to any line containing a `to:`',
+    )
+    assert.equal(
+      completedByOther(
+        asComments([
+          handoffLine('b'),
+          doneLine('a', 1700000003000),
+          releaseLine('b'),
+        ]),
+        'b',
+      )?.agent,
+      'a',
+      'and standing down re-applies the fence, exactly as it does for a CLAIM',
+    )
+  })
+
+  it('the fallback reads the GraphQL field live, so an unstamped DONE still fences on real bytes', () => {
+    // Ask 1's transport bug: `viewIssue` is `gh issue view --json comments`, whose comment objects
+    // carry `createdAt`. A `created_at`-only fallback made the whole branch dead in production and
+    // arm 9 was pinning a field nobody sends. These objects are the LIVE shape.
+    const live = (body, createdAt) => ({ body, createdAt })
+    const fence = completedByOther(
+      [live('**DONE** | agent: agent-a | pr: #1', '2026-11-10T04:00:00Z')],
+      'b',
+    )
+    assert.equal(fence.agent, 'a', 'an unstamped live DONE still fences')
+    assert.equal(
+      fence.at,
+      Date.parse('2026-11-10T04:00:00Z'),
+      'and the live ISO stamp is COERCED to ms, because the ordering rule compares numbers',
+    )
+    assert.equal(
+      completedByOther(
+        [
+          live(`**CLAIM** | agent: agent-b | at: ${1700000009000}`),
+          live('**DONE** | agent: agent-a', '2026-11-10T04:00:00Z'),
+        ],
+        'b',
+      ),
+      null,
+      'mixed shapes (a stamped claim, a stampless DONE) cannot order themselves, so protection defaults to the claimant',
     )
   })
 
