@@ -25,6 +25,7 @@ const resolveCyclePrompt = ({
   steering = '',
   reviewGaps = [],
   closures = null,
+  codeCurrency = '',
 } = {}) => {
   const base = isNewTask
     ? 'Proceed with development using the coordinate skill (finish any in-progress work, or check the board and PRs if ready for a new task).'
@@ -35,6 +36,10 @@ const resolveCyclePrompt = ({
   // its "0 unattested of N scanned" form, so a clean sweep and a blind one stay distinguishable to the
   // agent reading the prompt. An unreadable scan says UNKNOWN in its own note.
   if (closures?.note) withHint = `${withHint}\n${closures.note}`
+  // #122: the runner outlives the merges it should have picked up, so the agent is told which code is
+  // talking to it. Empty string means the tree has not moved under this process (or a read failed and
+  // the note was suppressed) - silence is only ever produced by those two states, never by guessing.
+  if (codeCurrency) withHint = `${withHint}\n${codeCurrency}`
   return steering
     ? `${withHint} Explicit steering from user: ${steering}`
     : withHint
@@ -52,6 +57,7 @@ const Runner = ({
   sessionTracker,
   waitImpl = waitInterruptible,
   sessionImpl = runPiSession,
+  codeCurrency = null,
 } = {}) => {
   const runLoop = async ({ maxCycles = Infinity, onCycle } = {}) => {
     if (sessionTracker && project) {
@@ -64,6 +70,10 @@ const Runner = ({
     try {
       while (cycle <= maxCycles) {
         if (onCycle) onCycle(cycle)
+
+        // #122: re-read each cycle, not once at boot - the tree moves under a long-running daemon, and
+        // a note computed at startup would be exactly as stale as the code it warns about.
+        const currencyNote = codeCurrency?.describe() ?? ''
 
         // 1. Preflight check
         const availability = await checkBacklogAvailability({ github, agent })
@@ -104,6 +114,7 @@ const Runner = ({
             steering,
             reviewGaps: availability.reviewGaps || [],
             closures: availability.closures || null,
+            codeCurrency: currencyNote,
           }),
           continueSession: !isNewTask,
           model,
