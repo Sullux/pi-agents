@@ -10,6 +10,7 @@ const { CodeCurrency } = require('../runner/code-currency')
 const { pad } = require('../coord/formatters')
 const { requireIssueNumber, requireMessage } = require('../coord/issueNumber')
 const { Provenance } = require('./selfcheck')
+const { RunnerCurrency } = require('./runner-currency')
 
 // #19: the usage path used to write to the GLOBAL console, so `Cli({ stdout })` could not see its
 // own help text and every `--help` render was unassertable in-process. The sink is a parameter with
@@ -84,6 +85,9 @@ const Cli = ({
   // #122: same shape as `provenance` above - the tree-vs-process reading is a non-deterministic
   // dependency (it spawns git), so it arrives through the factory and a test can hand it a fake.
   codeCurrency = CodeCurrency(),
+  // #130: same injected shape as the two above - it walks /proc and spawns git, so a test hands it a fake
+  // and can prove the verb travels the seam rather than re-implementing the census at the call site.
+  runnerCurrency = RunnerCurrency(),
   stdout = console.log,
   stderr = console.error,
 } = {}) => {
@@ -417,6 +421,17 @@ const Cli = ({
       }
       const env = loader.resolveInstanceEnv(agent, project)
       stdout(JSON.stringify(env, null, 2))
+      return 0
+    }
+
+    // #130: an operator query, not a per-session prompt - #122's note describes its own process and cannot
+    // see a sibling, so the only way to act on "restart the runner" with several daemons alive is to ask
+    // which ones are behind. Read-only: it names the pid, it never signals it.
+    if (command === 'runners') {
+      stdout(
+        runnerCurrency.describe() ||
+          'runner currency: no live runners to report (nothing matched, or the reads were unavailable)',
+      )
       return 0
     }
 
