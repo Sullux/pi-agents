@@ -124,11 +124,13 @@ const unreadableRefusal = (sub, number, error = {}) => {
   return (
     `Error: coord ${sub}: #${number} could not be READ, so nothing was written - ` +
     `${reason || 'the kind/state read returned no value'}. ` +
-    'coord verbs refuse on an UNREADABLE target rather than assuming it is open, because the old \'' +
-    'read failed\' path produced exactly the write this guard exists to stop, with no signal that the ' +
+    "coord verbs refuse on an UNREADABLE target rather than assuming it is open, because the old '" +
+    "read failed' path produced exactly the write this guard exists to stop, with no signal that the " +
     'check had been skipped. `--force` does not override: force means "I know this artifact is closed", ' +
     'not "I could not look". Retry the verb; to see the transport error yourself run ' +
-    '`gh api repos/<org>/<repo>/issues/' + number + ' --jq .state`. ' +
+    '`gh api repos/<org>/<repo>/issues/' +
+    number +
+    ' --jq .state`. ' +
     `Usage: page coord ${USAGE[sub] || sub}.`
   )
 }

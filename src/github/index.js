@@ -32,7 +32,11 @@ const kindReadFailure = (number, cause) =>
     new Error(
       `coord: the kind/state read for #${number} failed (${String(cause?.message ?? cause)})`,
     ),
-    { [KIND_READ_FAILURE]: true, number, reason: String(cause?.message ?? cause) },
+    {
+      [KIND_READ_FAILURE]: true,
+      number,
+      reason: String(cause?.message ?? cause),
+    },
   )
 
 const isKindReadFailure = (error) => error?.[KIND_READ_FAILURE] === true

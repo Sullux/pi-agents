@@ -254,8 +254,15 @@ describe('#126 kind casing and the per-issue timeline read', () => {
       'a failed read must not resolve to a value that `kind?.state` can read as open',
     )
     const err = settled.error
-    assert.ok(isKindReadFailure(err), `the throw must be tagged, got: ${err?.message}`)
-    assert.equal(err.number, 94, 'and it carries the number it could not resolve')
+    assert.ok(
+      isKindReadFailure(err),
+      `the throw must be tagged, got: ${err?.message}`,
+    )
+    assert.equal(
+      err.number,
+      94,
+      'and it carries the number it could not resolve',
+    )
     assert.match(
       err.message,
       /HTTP 502/,

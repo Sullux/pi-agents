@@ -415,8 +415,16 @@ test('#118 re-pins this arm: a read that answers nothing is a REFUSAL, not a pas
   }
   const coord = serviceOver(github)
   const res = await coord.status(21, 'text')
-  assert.equal(res.ok, false, 'a verb cannot post onto a target it could not read')
-  assert.match(res.error, /could not be READ/, 'and the message names a failed read')
+  assert.equal(
+    res.ok,
+    false,
+    'a verb cannot post onto a target it could not read',
+  )
+  assert.match(
+    res.error,
+    /could not be READ/,
+    'and the message names a failed read',
+  )
   assert.match(
     res.error,
     /state=null, not OPEN/,
@@ -540,8 +548,16 @@ test('#106 box 3, re-pinned by #118: the state test is an ALLOW-LIST - only an e
   }
   const results = await callEach(github)
   for (const [verb, res] of results) {
-    assert.equal(res.ok, false, `${verb}: a state this guard cannot name must not be written to`)
-    assert.match(res.error, /could not be READ/, `${verb}: same refusal, read-shaped`)
+    assert.equal(
+      res.ok,
+      false,
+      `${verb}: a state this guard cannot name must not be written to`,
+    )
+    assert.match(
+      res.error,
+      /could not be READ/,
+      `${verb}: same refusal, read-shaped`,
+    )
   }
   assert.deepEqual(
     github.writes,
@@ -623,7 +639,6 @@ test('#119 arm 2: done --force against a CLOSED target still refuses - "force do
   )
 })
 
-
 // --------------------------------------------------------------------------- #118
 // Three facts this file did not have, and the guard could not have had before the read itself was
 // able to say "I failed". Each arm is written so that REVERTING the allow-list turns it green while
@@ -638,11 +653,23 @@ test('#118: every mutating verb refuses when the kind read THROWS - a gh blip is
     },
   }
   const results = await callEach(github)
-  assert.equal(results.length, 5, 'all five mutating verbs are behind this guard')
+  assert.equal(
+    results.length,
+    5,
+    'all five mutating verbs are behind this guard',
+  )
   for (const [verb, res] of results) {
     assert.equal(res.ok, false, `${verb}: an unreadable target must refuse`)
-    assert.match(res.error, /could not be READ/, `${verb}: the message names a read failure`)
-    assert.match(res.error, /502/, `${verb}: and quotes the transport error, not a stack`)
+    assert.match(
+      res.error,
+      /could not be READ/,
+      `${verb}: the message names a read failure`,
+    )
+    assert.match(
+      res.error,
+      /502/,
+      `${verb}: and quotes the transport error, not a stack`,
+    )
     assert.match(
       res.error,
       /`--force` does not override/,
@@ -663,7 +690,11 @@ test('#118 control: a double that opts into state OPEN lets all five verbs throu
   const github = recorder({ isPullRequest: false, state: 'OPEN' })
   const results = await callEach(github)
   for (const [verb, res] of results) {
-    assert.notEqual(res.ok, false, `${verb}: OPEN must reach the write path, got ${res.error}`)
+    assert.notEqual(
+      res.ok,
+      false,
+      `${verb}: OPEN must reach the write path, got ${res.error}`,
+    )
   }
   assert.ok(
     github.writes.length >= 5,
@@ -685,8 +716,16 @@ test('#118: done --force does not override an unreadable read', async () => {
   }
   const coord = serviceOver(github)
   const res = await coord.done(21, { force: true })
-  assert.equal(res.ok, false, 'force skips the tick check, it does not skip the read')
-  assert.match(res.error, /could not be READ/, 'the refusal is the read-shaped one')
+  assert.equal(
+    res.ok,
+    false,
+    'force skips the tick check, it does not skip the read',
+  )
+  assert.match(
+    res.error,
+    /could not be READ/,
+    'the refusal is the read-shaped one',
+  )
   assert.match(res.error, /rate limit exceeded/, 'with the real cause quoted')
   assert.deepEqual(github.writes, [], 'and --force writes nothing here either')
 })
