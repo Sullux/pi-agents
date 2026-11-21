@@ -302,12 +302,30 @@ const closedRow = (number, ticked, unticked) => ({
   comments: [],
 })
 
-const xrefEvent = (prNumber, at = '2026-11-10T01:59:00Z') =>
+const xrefEvent = (
+  prNumber,
+  at = '2026-11-10T01:59:00Z',
+  mergedAt = '2026-11-10T01:59:30Z',
+) =>
   JSON.stringify({
     event: 'cross-referenced',
     created_at: at,
-    source: { issue: { number: prNumber, pull_request: {} } },
+    // #158: `merged_at` is a REAL field of this payload (source.issue.pull_request.merged_at) and the
+    // picker now ranks on it, so the fixture has to carry it. A helper that left it out would make
+    // every candidate unrankable and the `none` arms below would pass for the wrong reason - a
+    // vacuous green wearing a real assertion, which is how a fixture hides a pin (#833's class).
+    source: {
+      issue: { number: prNumber, pull_request: { merged_at: mergedAt } },
+    },
   })
+
+// a body that names the issue as its closing target: GitHub's own auto-close trigger, and the
+// strongest claim of causation available without a new API surface
+const closerBody = (n, ticked) => `${body(ticked, 0)}
+
+Closes #${n}`
+// a body with no Done-when section whatsoever, which must read differently from "no closer found"
+const sectionlessBody = '## Goal\n\nsome prose, no boxes anywhere'
 
 const scanWithEvidence = async (rows, { timeline = [], pullRequest } = {}) => {
   const state = { listCalls: 0, timelineCalls: [], prCalls: [] }
@@ -532,4 +550,233 @@ it('#151 non-vacuity pair: a non-empty window read never fires the probe at all'
     `probe fired on a populated window: ${calls.length} calls`,
   )
   assert.ok(result.note.includes('closed issue(s) scanned'), result.note)
+})
+
+// #158: the sweep resolves a closure by MERGE adjacency now, because a cross-referenced event's
+// created_at is the mention time and is uncorrelated with the merge - measured on pitcairn #1248,
+// whose closer PR #1250 mentions at 07:15:47 but merges at 10:03:59, two seconds before the close,
+// while the innocent PR #1245 mentions LATER (08:30:26) and merged 53 minutes earlier.
+it('#158 ranks by merge adjacency, so the closer wins over the latest mention (pitcairn #1248)', async () => {
+  const innocent = 1245
+  const closer = 1250
+  const { result, state } = await scanWithEvidence([closedRow(777, 0, 4)], {
+    timeline: [
+      // the innocent one is the LATEST mention before the close, which is what the old sort picked
+      xrefEvent(innocent, '2026-11-10T01:59:50Z', '2026-11-10T01:30:00Z'),
+      // the closer mentions EARLIER but merges nearest to the close
+      xrefEvent(closer, '2026-11-10T01:50:00Z', '2026-11-10T01:59:59Z'),
+    ],
+    pullRequest: (n) =>
+      n === closer
+        ? {
+            number: n,
+            mergedAt: '2026-11-10T01:59:59Z',
+            body: closerBody(777, 4),
+          }
+        : {
+            number: n,
+            mergedAt: '2026-11-10T01:30:00Z',
+            body: sectionlessBody,
+          },
+  })
+  assert.equal(
+    result.unattested[0].evidence.pr,
+    closer,
+    'a later MENTION must not outrank a nearer MERGE - the old rule returned the innocent PR',
+  )
+  assert.equal(
+    state.prCalls.length,
+    1,
+    `the named-closer short-circuit never traveled: ${state.prCalls}`,
+  )
+  assert.deepEqual(
+    state.prCalls,
+    [closer],
+    'the nearest-merge candidate must be probed first',
+  )
+  assert.ok(
+    result.note.includes(
+      '#777 0/4 in the issue body, 4/4 in PR #1250 - port the ticks or annotate why each box cannot be met',
+    ),
+    `the credited rendering is absent: ${result.note}`,
+  )
+})
+
+it("#158 control: where both rules agree, #147's credited row is byte-identical (pitcairn #1226)", async () => {
+  const { result, state } = await scanWithEvidence([closedRow(777, 0, 5)], {
+    timeline: [xrefEvent(1227, '2026-11-10T01:55:00Z', '2026-11-10T01:59:30Z')],
+    pullRequest: () => ({
+      number: 1227,
+      mergedAt: '2026-11-10T01:59:30Z',
+      body: closerBody(777, 5),
+    }),
+  })
+  assert.equal(result.unattested[0].evidence.pr, 1227)
+  assert.equal(
+    state.prCalls.length,
+    1,
+    'the control must not fan out into extra calls',
+  )
+  assert.ok(
+    result.note.includes(
+      '#777 0/5 in the issue body, 5/5 in PR #1227 - port the ticks or annotate why each box cannot be met',
+    ),
+    `#147's sentence changed under the ranking fix: ${result.note}`,
+  )
+})
+
+it("#158 a merge AFTER the close is not a closer even when its mention predates it (#1226's PR #1219 shape)", async () => {
+  const { result, state } = await scanWithEvidence([closedRow(777, 0, 2)], {
+    // mention 01:59 is INSIDE the old window, merge 02:00:05 is after the 02:00:00 close
+    timeline: [xrefEvent(1219, '2026-11-10T01:59:00Z', '2026-11-10T02:00:05Z')],
+  })
+  assert.equal(
+    result.unattested[0].evidence.none,
+    true,
+    'a PR that merged after the close cannot have caused it, whatever it mentioned',
+  )
+  assert.deepEqual(
+    state.prCalls,
+    [],
+    'the excluded candidate must never reach a pullRequest call',
+  )
+})
+
+it('#158 an unmerged PR (merged_at null) is never a closer', async () => {
+  const { result } = await scanWithEvidence([closedRow(777, 0, 2)], {
+    timeline: [xrefEvent(900, '2026-11-10T01:59:00Z', null)],
+  })
+  assert.equal(result.unattested[0].evidence.none, true)
+})
+
+it('#158 three states, three sentences: a sectionless closer is not "no closer found"', async () => {
+  const resolved = await scanWithEvidence([closedRow(777, 0, 2)], {
+    timeline: [xrefEvent(800, '2026-11-10T01:59:00Z', '2026-11-10T01:59:30Z')],
+    pullRequest: () => ({
+      number: 800,
+      mergedAt: '2026-11-10T01:59:30Z',
+      body: sectionlessBody,
+    }),
+  })
+  const missing = await scanWithEvidence([closedRow(777, 0, 2)], {
+    timeline: [],
+  })
+  assert.ok(
+    resolved.result.note.includes('resolves as the closer at merge'),
+    `the resolved-but-sectionless sentence is absent: ${resolved.result.note}`,
+  )
+  assert.ok(
+    resolved.result.note.includes('carries no Done-when section at all'),
+    resolved.result.note,
+  )
+  assert.ok(
+    missing.result.note.includes('no closing PR found'),
+    `the no-closer sentence is absent: ${missing.result.note}`,
+  )
+  assert.ok(
+    !missing.result.note.includes('resolves as the closer'),
+    'the two states collapsed back into one wording',
+  )
+  assert.ok(
+    !resolved.result.note.includes('no closing PR found'),
+    'the two states collapsed back into one wording (other direction)',
+  )
+  assert.equal(missing.result.unattested[0].evidence.none, true)
+})
+
+it('#158 a closer whose section has no boxes reads differently from having no section at all', async () => {
+  // tickState says boxes 0 / hasSection TRUE for a `## Done when` heading with prose under it, and
+  // boxes 0 / hasSection FALSE for a body with no such heading. Both reach the ev.pr branch (boxes is
+  // not > 0, so the credited form cannot fire), and the whole point of box 5 is that a reader can tell
+  // them apart. A fixture of body(0, 3) would NOT test this: three unticked boxes is boxes > 0, which
+  // routes to the credited sentence - the first draft of this arm did exactly that and passed nothing.
+  const emptySection = await scanWithEvidence([closedRow(777, 0, 2)], {
+    timeline: [xrefEvent(801, '2026-11-10T01:59:00Z', '2026-11-10T01:59:30Z')],
+    pullRequest: () => ({
+      number: 801,
+      mergedAt: '2026-11-10T01:59:30Z',
+      body: '## Done when\n\nplain prose, nothing checkbox-shaped',
+    }),
+  })
+  assert.ok(
+    emptySection.result.note.includes(
+      'has a Done-when section with nothing ticked',
+    ),
+    emptySection.result.note,
+  )
+  assert.ok(
+    !emptySection.result.note.includes('carries no Done-when section at all'),
+    emptySection.result.note,
+  )
+  const boxesPresent = await scanWithEvidence([closedRow(777, 0, 2)], {
+    timeline: [xrefEvent(802, '2026-11-10T01:59:00Z', '2026-11-10T01:59:30Z')],
+    pullRequest: () => ({
+      number: 802,
+      mergedAt: '2026-11-10T01:59:30Z',
+      body: body(0, 3),
+    }),
+  })
+  assert.ok(
+    boxesPresent.result.note.includes('0/3 in PR #802'),
+    `three unticked boxes in the closer must still be credited where they are: ${boxesPresent.result.note}`,
+  )
+})
+
+it('#158 the walk continues past a nearer merge that does not name the issue', async () => {
+  const { result, state } = await scanWithEvidence([closedRow(777, 0, 2)], {
+    timeline: [
+      xrefEvent(900, '2026-11-10T01:59:00Z', '2026-11-10T01:59:40Z'),
+      xrefEvent(901, '2026-11-10T01:40:00Z', '2026-11-10T01:40:30Z'),
+    ],
+    pullRequest: (n) =>
+      n === 901
+        ? {
+            number: n,
+            mergedAt: '2026-11-10T01:40:30Z',
+            body: closerBody(777, 2),
+          }
+        : {
+            number: n,
+            mergedAt: '2026-11-10T01:59:40Z',
+            body: sectionlessBody,
+          },
+  })
+  assert.equal(
+    result.unattested[0].evidence.pr,
+    901,
+    'a body that names the issue as its closing target outranks a nearer merge that does not',
+  )
+  assert.deepEqual(
+    state.prCalls,
+    [900, 901],
+    `the walk order is wrong: ${state.prCalls}`,
+  )
+})
+
+it('#158 the probe is capped, so one row cannot fan out into the whole mention history', async () => {
+  const many = Array.from({ length: 6 }, (_, i) =>
+    xrefEvent(
+      700 + i,
+      '2026-11-10T01:00:00Z',
+      `2026-11-10T01:${String(30 + i).padStart(2, '0')}:00Z`,
+    ),
+  )
+  const { result, state } = await scanWithEvidence([closedRow(777, 0, 2)], {
+    timeline: many,
+    pullRequest: (n) => ({
+      number: n,
+      mergedAt: '2026-11-10T01:59:00Z',
+      body: sectionlessBody,
+    }),
+  })
+  assert.equal(
+    state.prCalls.length,
+    3,
+    `CLOSER_PROBE_MAX is not bounding the walk: ${state.prCalls}`,
+  )
+  assert.equal(
+    result.unattested[0].evidence.pr,
+    705,
+    'within the cap the nearest merge must still win',
+  )
 })
