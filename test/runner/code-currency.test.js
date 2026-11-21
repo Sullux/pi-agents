@@ -21,13 +21,34 @@ const fakeGit = (script, calls) => (args) => {
 }
 
 const moved =
-  (count = '8') =>
+  (count = '8', world = {}) =>
   (key, n) => {
+    const { main = TIP, unmerged = '0', branch = 'main', ahead = count } = world
     if (key === 'rev-parse HEAD') return n === 0 ? LOADED : TIP
-    if (key.startsWith('rev-list --count')) return count
+    if (key === 'rev-parse --verify origin/main') return main
+    if (key === 'symbolic-ref --short -q HEAD') return branch
+    // keyed by RANGE, not by startsWith('rev-list'): the two counts answer different questions (how
+    // much main lacks vs how much the tree lacks), and one number handed to both would make a merged
+    // tree and an unmerged one indistinguishable in the harness - the #152 bug, rebuilt as a fixture
+    if (key === `rev-list --count origin/main..${TIP}`) return unmerged
+    if (key === `rev-list --count ${LOADED}..origin/main`) return ahead
     if (key.startsWith('log -1 --format=%cI')) return TIP_DATE
     return new Error(`unplanned git call: ${key}`)
   }
+
+// the three reads that decide the #152 verdict, in the order describe() asks for them on the
+// unmerged path - asserted per arm so a note produced by a DEGRADED read cannot satisfy an arm that
+// thinks it measured one (#537's untraveled-seam class, which this file already guards elsewhere)
+const travelled = (calls, extra = []) => {
+  const keys = calls.map((c) => c.key)
+  for (const k of [
+    'rev-parse HEAD',
+    'rev-parse --verify origin/main',
+    `rev-list --count origin/main..${TIP}`,
+    ...extra,
+  ])
+    assert.ok(keys.includes(k), `git read never traveled: ${k}`)
+}
 
 const clock = (...values) => {
   let i = 0
@@ -53,12 +74,15 @@ describe('CodeCurrency: a long-lived runner naming the code it actually loaded (
     )
   })
 
-  it('names both SHAs, the number of merges, the newest commit and the operator action', () => {
+  it('names both SHAs, the count of commits on main, the newest commit and the operator action', () => {
     const { currency } = plan(moved())
     const note = currency.describe()
     assert.ok(note.includes(`${'a'.repeat(7)} at boot`), note)
     assert.ok(note.includes(`tree now sits at ${'b'.repeat(7)}`), note)
-    assert.ok(note.includes('8 merges landed since'), note)
+    assert.ok(note.includes('8 commits of merged behavior landed since'), note)
+    // #152: a `rev-list --count` is a COMMIT count. Calling it "merges" was how the note could print
+    // "2 merges landed" about a pair whose non-merge commit was a feature commit.
+    assert.ok(!note.includes('merges landed'), note)
     assert.ok(note.includes(`(newest commit ${TIP_DATE})`), note)
     assert.ok(
       note.includes('Restart the runner (page start <agent> <project>)'),
@@ -100,9 +124,68 @@ describe('CodeCurrency: a long-lived runner naming the code it actually loaded (
     assert.ok(!note.includes('0 merges'), note)
   })
 
-  it('calls a non-descendant tip a branch switch, not an empty merge window', () => {
+  it('calls a sideways move a sideways move, not an empty window of merged work', () => {
     const note = plan(moved('0')).currency.describe()
-    assert.ok(note.includes('not a descendant - the branch was switched'), note)
+    assert.ok(note.includes('so a restart would load OLDER code'), note)
+    assert.ok(!note.includes('merges landed'), note)
+  })
+
+  // #152: the state that actually fired on this box. A peer checked the shared runtime tree out to an
+  // OPEN PR's head; main had not moved; the note told every runner in the fleet to restart to obtain
+  // "merged behavior" that did not exist. Both halves matter: the false claim AND the advice.
+  it('calls a ref main does not contain UNMERGED and refuses to advise a restart (the live incident)', () => {
+    const { currency, calls } = plan(moved('0', { unmerged: '2', branch: '' }))
+    const note = currency.describe()
+    travelled(calls, ['symbolic-ref --short -q HEAD'])
+    assert.ok(note.includes('2 commits main'), note)
+    assert.ok(note.includes('does NOT contain'), note)
+    assert.ok(note.includes('UNMERGED work'), note)
+    assert.ok(note.includes('a detached HEAD at'), note)
+    assert.ok(note.includes('no merged behavior is missing'), note)
+    assert.ok(note.includes('git checkout main && git pull --ff-only'), note)
+    assert.ok(!note.includes('Restart the runner ('), note)
+    assert.ok(!note.includes('merged behavior landed'), note)
+  })
+
+  it('says both true things at once when the tree is unmerged AND main has moved', () => {
+    const { currency, calls } = plan(
+      moved('3', { unmerged: '1', branch: 'feat/x' }),
+    )
+    const note = currency.describe()
+    travelled(calls, [
+      'symbolic-ref --short -q HEAD',
+      `rev-list --count ${LOADED}..origin/main`,
+    ])
+    assert.ok(note.includes('main is 3 commits ahead of what you loaded'), note)
+    assert.ok(note.includes('1 commit main'), note)
+    assert.ok(note.includes('branch feat/x'), note)
+    assert.ok(note.includes('restarting the runner would load it'), note)
+    assert.ok(!note.includes('Restart the runner ('), note)
+  })
+
+  it('does not read an unanswered unmerged count as merged (Number("") is 0)', () => {
+    const { currency, calls } = plan(moved('8', { unmerged: '' }))
+    const note = currency.describe()
+    travelled(calls)
+    assert.ok(note.includes('could not be counted'), note)
+    assert.ok(!note.includes('UNMERGED'), note)
+    assert.ok(!note.includes('merged behavior landed'), note)
+    assert.ok(!note.includes('Restart the runner ('), note)
+  })
+
+  it('declines to characterise the move when there is no origin/main to compare against', () => {
+    const { currency } = plan(moved('8', { main: '' }))
+    const note = currency.describe()
+    assert.ok(
+      note.includes('the merged tip could not be read (no origin/main)'),
+      note,
+    )
+    assert.ok(
+      note.includes('do not restart on the strength of this note alone'),
+      note,
+    )
+    assert.ok(!note.includes('Restart the runner ('), note)
+    assert.ok(!note.includes('merged behavior landed'), note)
   })
 
   it('reports process age from the injected clock, never the wall', () => {

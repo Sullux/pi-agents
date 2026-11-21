@@ -41,19 +41,58 @@ const short = (sha = '') => sha.slice(0, 7)
 const ageMinutes = (bootMs, nowMs) =>
   Math.max(0, Math.round((nowMs - bootMs) / 60000))
 
-// The commit-count phrase is where an operator learns how much merged behavior is missing, so a
-// missing answer degrades to "unknown" rather than to a number: `rev-list --count` on a SHAs-that-
-// exist pair can still fail (a shallow clone, a grafted object), and `Number('')` is 0 - which would
-// print "+0 commits" about a tree that moved and quietly imply "nothing you are missing".
-const countPhrase = (raw) => {
-  if (raw === '') return ', commit count unknown (git could not answer)'
-  const behind = Number(raw)
-  if (!Number.isFinite(behind))
-    return ', commit count unknown (git could not answer)'
-  if (behind === 0)
-    return ', and the tree moved to a ref that is not a descendant - the branch was switched'
-  return ` - ${behind} merge${behind === 1 ? '' : 's'} landed since`
+// #152: the reference is the MERGED tip, never the tree pointer. `describe()` used to compare
+// `rev-parse HEAD` at boot against `rev-parse HEAD` now, and this checkout - `/home/charles/sullux/pi-agents`,
+// which `readlink -f $(which page)` resolves to for EVERY agent - is shared mutable state that peers
+// move with `git checkout`. Measured live: a runner booted at `4f60f02` printed "the tree now sits at
+// 4e57472 - 2 merges landed since ... pick up the merged behavior" while `origin/main` was still
+// exactly `4f60f02`, `gh pr view 147` said `state=OPEN mergedAt=null`, and one of those two commits
+// (`4de78c4`) is not a merge at all. The note was therefore advising a fleet-wide restart onto
+// unreviewed code, in prose, with nothing refusing it. So: classify the move by counting commits in
+// each direction against `origin/main` - the same discriminator `src/cli/selfcheck.js` uses for the
+// tree half ("Trusted means the bytes ARE the merged upstream tip") and `src/cli/runner-currency.js`
+// already uses for the census - and count COMMITS, since a commit count is not a merge count.
+//
+// Counts are read as stdout (`rev-list --count`), not as an exit status, because `read()` swallows
+// errors by design: `merge-base --is-ancestor` answers 0-vs-1 and would arrive as '' either way.
+// `origin/main` is a LOCAL remote-tracking ref and this module never fetches - a daemon that fetched
+// on every prompt cycle would be a new outage on the thing it reports - so this can be stale by
+// however long the last fetch was. That is the same bound `selfcheck.js` accepts, and it is a bound
+// on "how much merged work am I missing", never on the safety claim: a stale `origin/main` can only
+// under-report main's advance, and the unmerged branch below errs toward NOT advising a restart.
+// An unanswered read is NOT zero. `Number('') === 0`, so a `rev-list --count` that failed would
+// arrive as 0 = "the tree contains nothing main lacks" = merged - which is the precise false claim
+// #152 exists to remove, rebuilt out of a coercion. The old `countPhrase` guarded `raw === ''` for
+// exactly this reason; the guard has to live here now that two counts answer different questions.
+const num = (raw) => {
+  const text = `${raw}`.trim()
+  const n = Number(text)
+  return text !== '' && Number.isFinite(n) ? n : NaN
 }
+
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`
+
+const where = (branch, tip) =>
+  branch ? `branch ${branch}` : `a detached HEAD at ${short(tip)}`
+
+// how far the loaded commit sits behind the MERGED tip, in the operator's terms. Three answers, and
+// the unknown one is deliberately not zero: `rev-list --count` can fail on a shallow clone or a
+// grafted object, and `Number('')` is 0 - which would print "no merged behavior is missing" about a
+// tree git could not measure (the same reason `selfcheck.js` prints 'unknown' for ahead/behind).
+const behindClause = (behind, loaded) =>
+  Number.isNaN(behind)
+    ? 'how far main sits ahead of it is unknown (git could not answer)'
+    : behind === 0
+      ? `your loaded ${short(loaded)} IS main's tip, so no merged behavior is missing`
+      : `main is ${plural(behind, 'commit')} ahead of what you loaded`
+
+// the same distance, read from a tree that IS on main's line - the case #122 was built for
+const landedClause = (behind) =>
+  Number.isNaN(behind)
+    ? 'commit count unknown (git could not answer)'
+    : behind === 0
+      ? 'main has not moved since you booted - the tree switched to an older commit on the same line, so a restart would load OLDER code'
+      : `- ${plural(behind, 'commit')} of merged behavior landed since`
 
 const CodeCurrency = ({
   git = defaultGit(PACKAGE_ROOT),
@@ -79,12 +118,51 @@ const CodeCurrency = ({
     if (tipSha === loadedSha) return ''
     const newest = read(['log', '-1', '--format=%cI', tipSha])
     const mins = ageMinutes(bootMs, now())
-    return (
+    const head =
       `Code currency: this runner loaded ${short(loadedSha)} at boot and the tree now sits at ${short(tipSha)}` +
-      `${countPhrase(read(['rev-list', '--count', `${loadedSha}..HEAD`]))}` +
-      `${newest ? ` (newest commit ${newest})` : ''}. ` +
-      `Every prompt and preflight verdict in this session was computed by the older code - it has been running ${mins} min. ` +
-      `Restart the runner (page start <agent> <project>) to pick up the merged behavior; this note advises only - nothing was refused, skipped or downgraded.`
+      `${newest ? ` (newest commit ${newest})` : ''} - it has been running ${mins} min. `
+    const advice =
+      'this note advises only - nothing was refused, skipped or downgraded.'
+
+    // no merged tip to compare against: say the tree moved, refuse to characterise it (#122's rule -
+    // a fabricated "fresh" is a lie, a fabricated "stale" is an accusation, and a fabricated
+    // "merged" is an instruction to load unreviewed code)
+    const mainSha = read(['rev-parse', '--verify', 'origin/main'])
+    if (!mainSha)
+      return (
+        `${head}the merged tip could not be read (no origin/main), so this note cannot say whether ` +
+        `${short(tipSha)} is merged behavior or someone's unmerged branch; do not restart on the ` +
+        `strength of this note alone; ${advice}`
+      )
+
+    const unmerged = num(
+      read(['rev-list', '--count', `origin/main..${tipSha}`]),
+    )
+    const behind = num(
+      read(['rev-list', '--count', `${loadedSha}..origin/main`]),
+    )
+    const branch = read(['symbolic-ref', '--short', '-q', 'HEAD'])
+    const mergedClause = behindClause(behind, loadedSha)
+
+    // git could not count either direction: report the move, characterise nothing
+    if (Number.isNaN(unmerged))
+      return `${head}the tree moved but its relationship to main (${short(mainSha)}) could not be counted; ${mergedClause}; ${advice}`
+
+    // the tree holds commits main does not: someone's checkout, not shipped code
+    if (unmerged > 0)
+      return (
+        `${head}that is ${plural(unmerged, 'commit')} main (${short(mainSha)}) does NOT contain - the ` +
+        `checkout has been moved onto ${where(branch, tipSha)}, so this is UNMERGED work, not shipped ` +
+        `behavior, and restarting the runner would load it. ${mergedClause}. Leave the checkout alone if ` +
+        `a peer is reviewing there (it is every agent's runtime); 'git checkout main && git pull --ff-only' ` +
+        `restores it once they are done; ${advice}`
+      )
+
+    // the tree is on main's line: count what is missing against main, not against the tree pointer
+    return (
+      `${head}${landedClause(behind)}. ` +
+      `Every prompt and preflight verdict in this session was computed by the older code. ` +
+      `Restart the runner (page start <agent> <project>) to pick up the merged behavior; ${advice}`
     )
   }
 
