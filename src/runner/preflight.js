@@ -215,31 +215,77 @@ const scanUnattestedClosures = async ({
   // `search` is ALWAYS forwarded: it is the reason the read is small enough to be complete at all, and the
   // pin that matters is this call arriving with a value starting `closed:>=` - a bare ceiling raise leaves
   // this arm red, which is the point (a green there would say nothing about the fix).
+  // #150: this string is now only the NOTE's identity and the probe's fallback; the read itself composes
+  // per-slice bounds inside `scanClosedWindow`. Kept because #135's sentence must name the window asked for.
   const search = windowSearch(now(), windowHours)
-  const options =
-    limit === null
-      ? { state: 'closed', search }
-      : { state: 'closed', search, limit }
 
-  let closed
+  // #150: the window read goes through `scanClosedWindow` rather than one `listIssues` call, because a
+  // single read of a wide window is REFUSED at the page ceiling and the sweep had nothing to say about
+  // it - #148 measured that at 90d on pitcairn: the predicate is honoured, 573 closed issues exist, and
+  // `--limit 500` returns exactly 500, which is the at-cap error, not a short answer. Bisecting the
+  // window turns "too wide to read" into rows. Slice failures never throw out of the scanner: it
+  // collects them, so `readable: false` below is now the ONLY unreadable shape, covering both the old
+  // throw path and an at-cap leaf at/below the bisect floor.
+  //
+  // `limit` mapping is load-bearing, not tidiness: CLOSE_SCAN_LIMIT is null, which means "let listIssues
+  // apply its own ceiling", and the scanner forwards the key whenever it is not `undefined`. Passing the
+  // null through would hand `gh --limit null` to the CLI, so the conversion happens here. The scanner's
+  // slices carry their own upper bound (`closed:<=`), which is what makes each read small enough to be
+  // complete; the whole-window `search` above is still what the note must name, because #135's
+  // distinction is CLOSED-axis vs OPEN-axis and the sentence has to say which window was asked for.
+  const windowOptions = limit === null ? undefined : limit
+  let win
   try {
-    closed = await github.listIssues(options)
+    win = await scanClosedWindow({
+      github,
+      now,
+      windowHours,
+      limit: windowOptions,
+    })
   } catch (err) {
-    // #85's rule, applied on this side of the API: an unreadable read is UNKNOWN, not clean.
+    // The scanner catches per slice, so reaching here means the seam itself is broken (a fake that
+    // throws synchronously outside the read, or a shape bug). It still has to land on UNKNOWN: a sweep
+    // that crashes is not a sweep that found nothing (#85's rule, unchanged in meaning).
+    win = {
+      readable: false,
+      rows: [],
+      slices: [],
+      calls: 0,
+      truncatedAtCap: false,
+      note: `read failed before any slice completed: ${String(err?.message ?? err).split('\n')[0]}`,
+    }
+  }
+  if (!win.readable) {
+    // Stated as reads/visited slices rather than "bisected into N", because `slices` counts every slice the
+    // scanner VISITED (a refused parent plus the leaves that answered), and a window that hit the floor
+    // immediately visits none - `1 read across 0 visited slices` is the honest description of an at-cap
+    // leaf at or below `minSliceHours`, and it is also the travel witness for this branch.
     return {
       readable: false,
       scanned: 0,
       inWindow: 0,
       windowHours,
+      slices: win.slices ? win.slices.length : 0,
+      calls: win.calls || 0,
       unattested: [],
       note:
-        'unattested-closure scan of the CLOSED axis: the read FAILED ' +
-        `(${String(err.message || err).split('\n')[0]}) - UNKNOWN, not clean. ` +
-        `the sweep asked for ${search}; an at-cap result here means the predicate was ignored or the ` +
-        'window itself exceeds the ceiling, which is a different failure than a repo too big to read.',
+        'unattested-closure scan of the CLOSED axis: UNKNOWN, not clean (pi#150). ' +
+        `the sweep asked for ${search}; the window read refused after ${win.calls || 0} read(s) across ` +
+        `${win.slices ? win.slices.length : 0} visited slice(s), which is a different failure than a repo ` +
+        'too big to read and a different one again from the OPEN axis - an at-cap leaf means a slice at or ' +
+        'below the bisect floor still cleared the page ceiling. ' +
+        `${String(win.note || 'no note from the window scanner').split('\n')[0]}`,
     }
   }
-  const rows = closed || []
+  const rows = win.rows || []
+  // #150: `scanned` stays what it always was - the number of rows the READS delivered - not the deduped
+  // in-window union. The distinction is load-bearing and a consumer file outside this issue's scope proves
+  // it: `preflight.test.js`'s "treats a row with no closedAt as outside the window" arm exists because a
+  // malformed row still has to show up as a delivery, or a repo whose closures all carry bad dates reads as
+  // an untested one. Counting the union instead made that arm red. Adjacent slices overlap by up to a day by
+  // design (each bound is day-floored), so this sum can exceed `inWindow` - which is the same, honest
+  // relationship the single read had, where the day floor widened the fetch past the window.
+  const deliveries = win.slices.reduce((a, s) => a + (s.read || 0), 0)
   let witness = ''
   if (rows.length === 0) {
     const probe = await scanClosedWindow({
@@ -429,8 +475,18 @@ const scanUnattestedClosures = async ({
     ...row,
     evidence: rowEvidence.get(row.number) || { none: true, unscanned: true },
   }))
+  // #150: a wide window is no longer one read, so the note says how many slices it took. Counted as the
+  // slices that ANSWERED (`!bisected`), not everything visited, so "swept in 2 slice(s) over 3 call(s)" reads
+  // true: three reads went out, one of them refused. Only printed when the window actually bisected, so
+  // every existing note assertion for the default 6h sweep is byte-identical - the arm below that pins the
+  // flat sentence is the guard that this clause is conditional.
+  const leaves = win.slices.filter((s) => !s.bisected).length
+  const swept =
+    win.slices.length > 1
+      ? ` (swept in ${leaves} slice(s) over ${win.calls} call(s), pi#150)`
+      : ''
   const summary =
-    `${rows.length} closed issue(s) scanned, ` +
+    `${deliveries} closed issue(s) scanned${swept}, ` +
     witness +
     `${inWindow.length} closed within the last ${windowHours}h, ${unattested.length} unattested, ` +
     `${unattestable.length} with no tick mechanism (not gaps: #99 ratified them)`
@@ -464,9 +520,11 @@ const scanUnattestedClosures = async ({
       : ''
   return {
     readable: true,
-    scanned: rows.length,
+    scanned: deliveries,
     inWindow: inWindow.length,
     windowHours,
+    slices: win.slices.length,
+    calls: win.calls,
     unattested: unattestedWithEvidence,
     unattestable,
     note:
