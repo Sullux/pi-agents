@@ -446,7 +446,7 @@ const scanUnattestedClosures = async ({
         ? `#${s.number} ${s.ticked}/${s.boxes} in the issue body, ${ev.ticked}/${ev.boxes} in PR #${ev.pr} - port the ticks or annotate why each box cannot be met`
         : ev.pr
           ? `#${s.number} ${s.ticked}/${s.boxes} ticked, closed ${s.closedAt} (PR #${ev.pr} resolves as the closer at merge ${ev.mergedAt} but its body ${ev.hasSection ? 'has a Done-when section with nothing ticked' : 'carries no Done-when section at all'} - the ticks are not in any closing PR)`
-          : `#${s.number} ${s.ticked}/${s.boxes} ticked, closed ${s.closedAt} (no closing PR found: no PR mentioning this issue merged before the close, so a hand or coord-done verb closed it and the issue body is the only evidence)`
+          : `#${s.number} ${s.ticked}/${s.boxes} ticked, closed ${s.closedAt} (no closing PR found: no PR mentioning this issue merged before the close, so it was closed by hand, by a coord done verb, or by a raw commit - the issue body is the only evidence)`
     })
     .join('; ')
   const anyPrEvidence = shown.some((s) => {
