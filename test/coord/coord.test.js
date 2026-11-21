@@ -1,7 +1,11 @@
 const { describe, it } = require('node:test')
 const assert = require('node:assert/strict')
 const { cleanAgent, ownerOf, isMine } = require('../../src/coord/owner')
-const { parseScope, checkScopeCollision } = require('../../src/coord/scope')
+const {
+  parseScope,
+  checkScopeCollision,
+  pathOverlaps,
+} = require('../../src/coord/scope')
 const { evaluateClaimRace, liveClaims } = require('../../src/coord/race')
 
 describe('Coordination Engine: Owner Resolution', () => {
@@ -99,6 +103,254 @@ describe('Coordination Engine: Scope & Collisions', () => {
     const targetScopeClean = ['src/utils.js']
     const clean = checkScopeCollision(targetScopeClean, activeIssues, 'delta')
     assert.equal(clean.hasCollision, false)
+  })
+
+  // #165: `Array.prototype.includes` compared whole strings, so a broad declaration fenced nothing. Measured on
+  // pitcairn at `cccbf20`: 14 containment-only overlaps among open issues, 0 detected - which is how I claimed
+  // #1307 into a file two open PRs were editing and the gate said nothing. These are the four quadrants the
+  // issue names, plus the boundary that makes widening safe, the waiver that makes it survivable, and the
+  // description that makes the refusal explain itself.
+  const heldPeer = (files, number = 400, agent = 'alpha') => ({
+    number,
+    body: `## Files\n${files}`,
+    comments: [{ body: `**CLAIM** | agent: agent-${agent} | human: @Sullux` }],
+  })
+
+  it('#165 quadrant 1: a directory token reaches a descendant file, and says which way', () => {
+    const res = checkScopeCollision(
+      ['src/server/db/index.js'],
+      [heldPeer('src/server')],
+      'delta',
+    )
+    assert.equal(res.hasCollision, true)
+    assert.equal(
+      res.collidingFiles[0],
+      'src/server contains src/server/db/index.js',
+    )
+    assert.equal(res.containment, true)
+  })
+
+  it('#165 quadrant 2: two directories collide in either direction', () => {
+    const claimantDeeper = checkScopeCollision(
+      ['src/server/db'],
+      [heldPeer('src/server')],
+      'delta',
+    )
+    assert.equal(
+      claimantDeeper.collidingFiles[0],
+      'src/server contains src/server/db',
+    )
+    const claimantBroader = checkScopeCollision(
+      ['src/server'],
+      [heldPeer('src/server/db')],
+      'delta',
+    )
+    assert.equal(
+      claimantBroader.collidingFiles[0],
+      'src/server/db contains src/server',
+    )
+  })
+
+  it('#165 quadrant 3: sibling directories do not collide', () => {
+    assert.equal(
+      checkScopeCollision(['src/b/x.js'], [heldPeer('src/a')], 'delta')
+        .hasCollision,
+      false,
+    )
+    assert.equal(
+      checkScopeCollision(
+        ['src/server/routes'],
+        [heldPeer('src/server/db')],
+        'delta',
+      ).hasCollision,
+      false,
+      'two subdirectories of a shared parent are not an overlap',
+    )
+  })
+
+  it('#165 quadrant 4: the boundary is a separator, so a near-miss prefix never collides', () => {
+    for (const near of [
+      'src/serverless',
+      'src/server-foo/x.js',
+      'src/server2',
+    ]) {
+      assert.equal(
+        checkScopeCollision([near], [heldPeer('src/server')], 'delta')
+          .hasCollision,
+        false,
+        `${near} must not be fenced by src/server`,
+      )
+    }
+  })
+
+  it('#165 the same region written three ways is still one region', () => {
+    const forms = [
+      'src/server/',
+      './src/server',
+      'src//server',
+      'src/x/../server',
+    ]
+    for (const form of forms) {
+      assert.equal(
+        pathOverlaps(form, 'src/server/db/index.js'),
+        true,
+        `${form} normalizes to src/server`,
+      )
+    }
+  })
+
+  it('#165 a pair equality could not see becomes a HARD refusal once the peer is held', () => {
+    // This is the criterion that matters operationally: before the fix the pair was invisible, so no
+    // advisory even fired. Widening must not merely add noise - it has to be able to stop a collision.
+    const res = checkScopeCollision(
+      ['src/server/routes/api/booking/submission.js'],
+      [heldPeer('src/server', 401, 'charlie')],
+      'bravo',
+      {
+        number: 900,
+        body: '## Files\nsrc/server/routes/api/booking/submission.js',
+      },
+    )
+    assert.equal(res.hasCollision, true)
+    assert.equal(res.collidingAgent, 'charlie')
+    assert.equal(
+      res.warnings.length,
+      0,
+      'a held overlap is a refusal, not a warning',
+    )
+  })
+
+  it('#165 the split: waiver survives containment, in both directions', () => {
+    // Without this the fix converts a class of legitimate claims into unclaimable work with no documented
+    // exit, which is the failure mode #165 calls out explicitly. Tested in both homes for the waiver line.
+    const here = {
+      number: 500,
+      body: '## Files\nsrc/server/db/index.js\n\nsplit: #401',
+    }
+    const peer = {
+      ...heldPeer('src/server', 401, 'charlie'),
+      body: '## Files\nsrc/server',
+    }
+    assert.equal(
+      checkScopeCollision(['src/server/db/index.js'], [peer], 'bravo', here)
+        .hasCollision,
+      false,
+      'waiver in the claimant body settles the containment pair',
+    )
+    const there = { number: 500, body: '## Files\nsrc/server/db/index.js' }
+    const peerWaived = { ...peer, body: '## Files\nsrc/server\n\nsplit: #500' }
+    assert.equal(
+      checkScopeCollision(
+        ['src/server/db/index.js'],
+        [peerWaived],
+        'bravo',
+        there,
+      ).hasCollision,
+      false,
+      'waiver in the peer body settles it identically',
+    )
+    assert.equal(
+      checkScopeCollision(['src/server/db/index.js'], [peer], 'bravo', there)
+        .hasCollision,
+      true,
+      'and with neither line the pair still fences, so the waiver is load-bearing, not decoration',
+    )
+  })
+
+  it('#165 prose inside a Files section still cannot fabricate a collision', () => {
+    // The half of #820's guarantee that survives widening: an uncomparable token is comparable only to
+    // itself, so a sentence that happens to contain a path does not fence that path for anyone else.
+    const prosePeer = heldPeer(
+      'the gate reads src/server/db/index.js from the Files section of every open issue tonight',
+    )
+    assert.equal(
+      checkScopeCollision(['src/server/db/index.js'], [prosePeer], 'delta')
+        .hasCollision,
+      false,
+      'a prose line is not a region',
+    )
+    const exactProse = heldPeer('src/server')
+    assert.equal(
+      pathOverlaps('the file src/server', 'src/server'),
+      false,
+      'whitespace makes a token incomparable, not a prefix',
+    )
+  })
+
+  it('#165 pathOverlaps is one comparator for every call site, not a second rule beside the old one', () => {
+    assert.equal(pathOverlaps('src/server', 'src/server/db.js'), true)
+    assert.equal(pathOverlaps('src/server/**', 'src/server/db.js'), true)
+    assert.equal(pathOverlaps('src/server', 'src/serverless/db.js'), false)
+    assert.equal(
+      pathOverlaps('src/**/foo.js', 'src/a/foo.js'),
+      false,
+      'interior globs are not guessed',
+    )
+    assert.equal(
+      pathOverlaps('src/**/foo.js', 'src/**/foo.js'),
+      true,
+      'the same token still equals itself',
+    )
+    assert.equal(
+      pathOverlaps('', 'src/a.js'),
+      false,
+      'an empty token reaches nothing, not everything',
+    )
+  })
+
+  it('#165 the board marks a broad declaration before it fences anyone', () => {
+    // A bare directory now means "everything under here", which is invisible in a FILES column unless the
+    // cell says so: `src/server` and `src/server/` are the same claim, and only the second one reads as a
+    // region to the next agent. Globs already announce their own breadth, so they are left verbatim.
+    const { CoordService } = require('../../src/coord/index')
+    const broad = {
+      number: 1281,
+      title: 'per-person immigration emails',
+      labels: [
+        { name: 'status:unclaimed' },
+        { name: 'ws:integration' },
+        { name: 'p1' },
+      ],
+      body: '## Files\nsrc/server/routes/api/booking\nsrc/server',
+      comments: [],
+    }
+    const narrow = {
+      number: 1290,
+      title: 'agent write paths',
+      labels: [
+        { name: 'status:claimed' },
+        { name: 'ws:agent-portal' },
+        { name: 'p2' },
+      ],
+      body: '## Files\nsrc/server/routes/api/booking/sailing-gate.js',
+      comments: [{ body: '**CLAIM** | agent: agent-delta' }],
+    }
+    const github = {
+      listIssues: async () => [broad, narrow],
+      viewIssue: async (n) => (n === 1281 ? broad : narrow),
+    }
+    return CoordService({ github, agent: 'bravo' })
+      .board()
+      .then((out) => {
+        const broadRow = out.split('\n').find((l) => l.startsWith('#1281'))
+        const narrowRow = out.split('\n').find((l) => l.startsWith('#1290'))
+        // Pinned as the whole rendered cell, not `includes('src/server/')`: that substring is already present
+        // inside `src/server/routes/api/booking`, so the first draft of this arm stayed GREEN with the marker
+        // deleted. A pin that a neuter cannot redden is decoration, and I found it by neutering rather than by
+        // hoping.
+        assert.ok(
+          broadRow.includes('src/server/routes/api/booking/ src/server/'),
+          `both broad declarations must read as regions, cell verbatim: ${broadRow}`,
+        )
+        assert.ok(
+          narrowRow.includes('src/server/routes/api/booking/sailing-gate.js'),
+          `a concrete path keeps its own spelling: ${narrowRow}`,
+        )
+        assert.ok(
+          !narrowRow.includes('sailing-gate.js/'),
+          `and gains no directory slash: ${narrowRow}`,
+        )
+      })
   })
 })
 

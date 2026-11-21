@@ -279,9 +279,26 @@ word `on` as its hub update (#387).
   #816 itself: 14 prose entries, 0 paths), and a fenced example contributed
   its example path plus the closing fence. Both are pinned in
   `pi-agents/test/coord/coord.test.js`.
-- Comparison is whole-line set intersection, so prose inside a `## Files`
-  section cannot fabricate a collision. A refusal citing English function
-  words (`on: the,the,for,the`) came from the non-authoritative bash copy.
+- Comparison is path-SEGMENT containment as well as whole-string equality
+  (#165): `src/server` collides with `src/server/db/index.js`, and
+  `src/server/**` collides too, because a trailing glob names the same region
+  and leaving it inert would let an author defeat the gate by typing two
+  characters. The boundary is a `/`, never a bare prefix, so `src/server` does
+  not reach `src/serverless` or `src/server-foo`; an INTERIOR glob
+  (`src/**/foo.js`) is still compared by equality, because the gate will not
+  guess a depth it cannot resolve. The prose half of the old rule survives and
+  is what makes widening safe: a token containing whitespace or any non-path
+  character is comparable only to itself, so prose inside a `## Files` section
+  still cannot fabricate a collision. A refusal citing English function words
+  (`on: the,the,for,the`) came from the non-authoritative bash copy.
+- Widening a signal falsifies the prose written about the old one, so read the
+  bullet above with its blast radius: measured on pitcairn `cbba2b0` (17 open
+  issues) the equality rule found 24 colliding pairs and the containment rule
+  found 42 more that had been invisible - 12 of them become hard refusals and
+  30 become warnings. Expect refusals on issues that were claimable last
+  week; the documented exit is a line-anchored `split: #N` in either body, and
+  `board` now marks a broad declaration as `src/server/` so you can see which
+  rows are wide before you hit the wall.
 - The gate SKIPS issues you already claim, by design: the owner cannot
   collide with itself. The consequence is asymmetric - annotate your own
   Files section with prose and you can make an unrelated issue unclaimable

@@ -37,7 +37,20 @@ const pad = (str = '', len = 0) =>
 // refused it with "declares no Files scope". Two surfaces disagreed about the same fact. Keep the
 // parse strict and make the board loud instead, so the unclaimable issue is visible before an
 // agent spends a claim attempt discovering it.
-const scopeCell = (body) => parseScope(body).join(' ') || '!!NO-SCOPE'
+// #165: a bare-directory declaration now fences everything under it, so the board says which rows are broad
+// before someone discovers it by being refused. Trailing slash is the convention the fleet already reads as
+// "directory", and it costs nothing to a path token, which never ends in one.
+const directoryToken = (token) =>
+  !/\.[A-Za-z0-9]+$/.test(token.split('/').pop() ?? '') && !token.includes('*')
+const scopeCell = (body) => {
+  const files = parseScope(body)
+  if (!files.length) return '!!NO-SCOPE'
+  return files
+    .map((file) =>
+      directoryToken(file) ? `${file.replace(/\/+$/, '')}/` : file,
+    )
+    .join(' ')
+}
 
 // #137: `hasStatusLabel` and `statusCell` MOVED to `scope.js` so the gate classifies soft-vs-hard
 // through the SAME reader the board prints - see the canonical comment there. The board keeps

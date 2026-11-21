@@ -152,17 +152,44 @@ describe('scope gate #76: an unclaimed open issue with a shared concrete path wa
     assert.equal(res.warnings[0].issue, 1179)
   })
 
-  it('glob-vs-concrete stays invisible, deliberately: this issue is the ownerless skip, not #896', () => {
-    // Pinned as CURRENT behaviour so a future glob-matching fix is a deliberate edit here instead
-    // of a silent widening. Expanding a glob to concrete paths is a different decision and would
-    // make every claim warn about every directory-declared issue, which is not this contract.
+  it("a trailing glob is a region, so it collides - the deliberate edit #76's pin reserved", () => {
+    // #165 IS the "future glob-matching fix" this arm pinned as current behaviour, and it reserved the edit
+    // precisely so a widening could not happen silently. It is happening deliberately: leaving `src/**` inert
+    // would make the containment gate defeatable by typing two characters, which is the decoration hole
+    // `4edf471` already closed once for bullets, backticks and `;`-joined declarations. The warning flood the
+    // old comment feared is real but advisory - an unheld overlap warns and never refuses (#76), so a broad
+    // epic stays claimable while the claimant finally sees the neighbours.
     const globPeer = issue(1180, '## Files\nsrc/**')
     const res = checkScopeCollision(['src/x.js'], [globPeer], 'bravo', target())
 
-    assert.equal(res.warnings.length, 0)
+    assert.equal(res.warnings.length, 1, 'src/** now reaches src/x.js')
+    assert.equal(res.warnings[0].files[0], 'src/** contains src/x.js')
+    assert.ok(
+      !res.hasCollision,
+      'and it is still only a warning, because nobody holds it',
+    )
     assert.ok(
       !parseScope(globPeer.body).includes('src/x.js'),
-      'the premise: a glob never matches a concrete path',
+      'the premise survives: the declared glob is not EXPANDED into the Files cell',
+    )
+  })
+
+  it('an interior glob is still inert, because the gate will not guess at a pattern it cannot resolve', () => {
+    // The half of the decision that keeps it bounded: `src/**/foo.js` may or may not reach `src/a/foo.js`
+    // depending on depth, and a refusal whose reasoning needs glob semantics the author never verified is how
+    // an agent starts trusting a gate they cannot explain. Equality, and nothing else.
+    const peer = issue(1181, '## Files\nsrc/**/foo.js')
+    assert.equal(
+      checkScopeCollision(['src/a/foo.js'], [peer], 'bravo', target()).warnings
+        .length,
+      0,
+      'depth is not guessed',
+    )
+    assert.equal(
+      checkScopeCollision(['src/**/foo.js'], [peer], 'bravo', target())
+        .warnings[0].files[0],
+      'src/**/foo.js',
+      'the same token, written the same way, still matches itself',
     )
   })
 })
