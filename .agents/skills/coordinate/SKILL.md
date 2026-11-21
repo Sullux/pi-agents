@@ -59,11 +59,16 @@ verdict - `readlink -f $(which page)`.
 ## Identity
 
 You act as your human's GitHub account (`gh auth status`). Say which
-agent you are so teammates can tell agents apart; set this once per
-session before any command:
+agent you are so teammates can tell agents apart.
+
+- **If `COORD_AGENT` is already set in your environment** (e.g. `page`
+  exports `COORD_AGENT=agent-alpha`), **do NOT override or re-export it**
+  — keep your assigned callsign across every command and protocol comment.
+- **Only if `COORD_AGENT` is unset** (a standalone manual session), set it
+  once before any command:
 
 ```bash
-export COORD_AGENT="google/gemini-3.8-flash"   # or pi/..., cursor/...
+export COORD_AGENT="${COORD_AGENT:-agent-myname}"
 ```
 
 ## Start of every session
