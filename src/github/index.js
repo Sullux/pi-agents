@@ -347,7 +347,10 @@ const GitHubClient = ({
       '--limit',
       String(limit),
       '--json',
-      'number,title,labels,comments,body,closedAt',
+      // #161: `stateReason` belongs here, not in a per-row follow-up call. gh answers it on the
+      // LIST endpoint (`gh issue list --state closed --json number,stateReason` -> `1294 NOT_PLANNED`),
+      // so the sweep can tell a withdrawn close from a dropped promise without one spawn per row.
+      'number,title,labels,comments,body,closedAt,stateReason',
     ]
     // #107: --limit cannot say "the last six hours", and asking for a smaller number is not a
     // smaller read when the population exceeds the ceiling either way - the rows past the cap are

@@ -381,7 +381,10 @@ it('#123 evidence: a closing PR full of ticks relocates the accusation, per-row 
   )
   assert.ok(
     result.note.includes(
-      '#777 0/2 in the issue body, 2/2 in PR #778 - port the ticks or annotate why each box cannot be met',
+      // #161: this string is the advice, not just the layout, so it moves with the wording. The
+      // clause it used to end with promised a remedy nothing parses ("annotate why each box cannot
+      // be met"), which charlie measured firing on pitcairn #1294 after a 5/5 annotation.
+      '#777 0/2 in the issue body, 2/2 in PR #778 - port them into the issue body, ticks are what the sweep counts (#161)',
     ),
     `the pr-case rendering is absent: ${result.note}`,
   )
@@ -617,7 +620,7 @@ it('#158 ranks by merge adjacency, so the closer wins over the latest mention (p
   )
   assert.ok(
     result.note.includes(
-      '#777 0/4 in the issue body, 4/4 in PR #1250 - port the ticks or annotate why each box cannot be met',
+      '#777 0/4 in the issue body, 4/4 in PR #1250 - port them into the issue body, ticks are what the sweep counts (#161)',
     ),
     `the credited rendering is absent: ${result.note}`,
   )
@@ -640,7 +643,7 @@ it("#158 control: where both rules agree, #147's credited row is byte-identical 
   )
   assert.ok(
     result.note.includes(
-      '#777 0/5 in the issue body, 5/5 in PR #1227 - port the ticks or annotate why each box cannot be met',
+      '#777 0/5 in the issue body, 5/5 in PR #1227 - port them into the issue body, ticks are what the sweep counts (#161)',
     ),
     `#147's sentence changed under the ranking fix: ${result.note}`,
   )
@@ -1074,4 +1077,157 @@ it('#150 a 6h window costs exactly one read, and day-floor slack still counts as
     !result.unattested.some((u) => u.number === 1319),
     'the slack row was counted as a delivery and must NOT be accused',
   )
+})
+
+// ===========================================================================
+// #161: a close with `state_reason: not_planned` is a WITHDRAWAL - a duplicate or
+// superseded issue closed precisely because the work will not happen - so its
+// unticked boxes are true by definition and accusing them is unfalsifiable. The
+// trigger is pitcairn #1294: filed and closed by the same agent eleven minutes
+// apart, 0/5 ticked because ticking would be a false attestation, and named in
+// every prompt anyway. Box order follows the issue, with box 4 (selectivity)
+// first because it is the test and the count is not.
+// ===========================================================================
+
+const withdrawn = (number, reason) => ({
+  ...closedRow(number, 0, 4),
+  stateReason: reason,
+})
+
+it('#161 accuses a completed 0-ticked close and stays silent about a not_planned one', async () => {
+  const { result } = await scanDriven([
+    withdrawn(901, 'COMPLETED'),
+    withdrawn(907, 'NOT_PLANNED'),
+  ])
+  assert.match(result.note, /#901 0\/4/)
+  assert.ok(
+    !/#907\b/.test(result.note),
+    `a withdrawn close was accused anyway: ${result.note}`,
+  )
+  assert.deepEqual(
+    result.unattested.map((r) => r.number),
+    [901],
+    'the accusation list must hold the completed close only',
+  )
+})
+
+for (const [label, reason] of [
+  ['null', null],
+  ['an empty string', ''],
+  ['completed', 'COMPLETED'],
+  ['a spelling the allow-list has never seen (reopened)', 'REOPENED'],
+]) {
+  it(`#161 still accuses a close whose stateReason is ${label}`, async () => {
+    const { result } = await scanDriven([withdrawn(902, reason)])
+    assert.equal(
+      result.unattested.length,
+      1,
+      `a ${label} reason escaped the accusation: ${result.note}`,
+    )
+    assert.match(result.note, /#902 0\/4/)
+    assert.match(result.note, /0 withdrawn \(not_planned\), not accused/)
+  })
+}
+
+it('#161 suppresses both gh spellings of not_planned, because list and REST disagree on case', async () => {
+  // gh's LIST endpoint answers `NOT_PLANNED` (measured live: `1294 NOT_PLANNED`) while the REST
+  // payload answers lowercase, so a comparison that forgot to normalize would suppress exactly one
+  // of the two and read as "mostly fixed" - the worst partial, because the surviving row looks like
+  // the bug was never filed at all.
+  for (const reason of ['NOT_PLANNED', 'not_planned', ' Not_Planned ']) {
+    const { result } = await scanDriven([withdrawn(903, reason)])
+    assert.equal(
+      result.unattested.length,
+      0,
+      `${reason} was still accused: ${result.note}`,
+    )
+    assert.match(
+      result.note,
+      /1 withdrawn \(not_planned\), not accused \(#161\)/,
+    )
+  }
+})
+
+it('#161 prints the withdrawn population when nothing else is accused, so a zero is not silence', async () => {
+  const { result } = await scanDriven([withdrawn(904, 'NOT_PLANNED')])
+  assert.match(result.note, /0 unattested/)
+  // Without this clause "0 unattested" reads as a clean window when the window was in fact full of
+  // withdrawals - #114 removed exactly this ambiguity for the unattestable population, and the filter
+  // this change introduces would have re-created it one word later (#151's rule).
+  assert.match(result.note, /1 withdrawn \(not_planned\), not accused \(#161\)/)
+})
+
+it('#161 drops the remedy the code cannot observe and keeps the one it can', async () => {
+  const { result } = await scanDriven([{ ...closedRow(905, 0, 3) }])
+  for (const dead of [
+    'annotate why it cannot be met',
+    'annotate why each box cannot be met',
+  ]) {
+    assert.ok(
+      !result.note.includes(dead),
+      `the note still promises an unobserved remedy: ${dead}`,
+    )
+  }
+  assert.match(result.note, /belongs closed as `not_planned`/)
+  // The new sentence is only honest if the behaviour matches it, so the claim gets pinned from both
+  // ends: prose that explains a gap does NOT clear the line, which is what charlie measured on
+  // pitcairn #1294 and what the old wording silently promised would.
+  const annotated = await scanDriven([
+    {
+      ...closedRow(906, 0, 3),
+      body: `${body(0, 3)}\n\nNOT MET because the duplicate covers it`,
+    },
+  ])
+  assert.equal(
+    annotated.result.unattested.length,
+    1,
+    'annotation prose was read as an attestation',
+  )
+  assert.match(annotated.result.note, /#906 0\/3/)
+})
+
+it('#161 keeps the PR-evidence branch honest too, since it carried the same false promise', async () => {
+  // The other sentence: this branch fires when the closing PR turns out to hold the ticks, and its
+  // old advice was "port them or annotate why each box cannot be met" - the same unparseable remedy
+  // wearing different words, in a string no test read.
+  const { result } = await scanWithEvidence([withdrawn(908, 'COMPLETED')], {
+    timeline: [xrefEvent(909)],
+  })
+  assert.match(result.note, /#908 0\/4 in the issue body, 2\/2 in PR #909/)
+  assert.ok(
+    !result.note.includes('annotate why'),
+    'the PR branch still offers an unobserved remedy',
+  )
+  assert.match(result.note, /membership counts ticks/)
+  // The THIRD site, and the one a `cut -c1-120` of the source hid from me while I was auditing: the
+  // per-row line carried its own `port the ticks or annotate why each box cannot be met`, in a
+  // template literal whose tail fell past the terminal's clip. The note-wide assertion above is what
+  // actually caught it, so the wording it now replaces gets pinned directly rather than trusted.
+  assert.match(
+    result.note,
+    /port them into the issue body, ticks are what the sweep counts/,
+  )
+})
+
+it('#161 suppresses a withdrawal without spending a closer probe on it', async () => {
+  // "No extra spawn" is the claim the whole design rests on: reading the field off the row is free,
+  // while proving withdrawal per issue would cost a timeline walk for every closure in the window -
+  // 581 rows on pitcairn today. A withdrawn row never enters `shown`, so it never reaches the probe.
+  const suppressed = await scanWithEvidence([withdrawn(910, 'NOT_PLANNED')], {
+    timeline: [xrefEvent(911)],
+  })
+  const accused = await scanWithEvidence([withdrawn(912, 'COMPLETED')], {
+    timeline: [xrefEvent(913)],
+  })
+  assert.deepEqual(
+    suppressed.state.timelineCalls,
+    [],
+    'a suppressed withdrawal still cost a probe',
+  )
+  assert.equal(
+    accused.state.timelineCalls.length,
+    1,
+    'the control must spend the probe it proves',
+  )
+  assert.equal(suppressed.state.listCalls, 1)
 })

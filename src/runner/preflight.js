@@ -200,6 +200,21 @@ const CLOSER_PROBE_MAX = 3
 // `71e314b` (the #148 header), so it stays under the bisect's own ceiling without incident.
 const POPULATION_PROBE_HOURS = 24 * 90
 
+// #161: a close with `state_reason: not_planned` is a WITHDRAWAL - a duplicate or superseded issue is
+// closed precisely because the work will not happen, so its unticked Done-when boxes are true by
+// definition and accusing them is unfalsifiable. The live case is pitcairn #1294: filed and closed by
+// the same agent eleven minutes apart, and named in every prompt's advice line anyway, because
+// membership is `attestable && unticked > 0` and no branch has ever read prose. So withdrawn closures
+// leave the accusation lists and arrive as their own count.
+//
+// An ALLOW-LIST, never a deny-list of `completed`. The `#112` note in `src/github/index.js` records a
+// real close that came back with `state_reason: null`, gh's list endpoint answers UPPERCASE where the
+// REST payload answers lowercase, and an older gh that never projected the column answers `undefined`:
+// so the comparison runs on a normalized token and anything unseen - `completed`, `reopened`, `null`,
+// empty, a future spelling - KEEPS accusing. Inverting this is the bad failure, because a null read as
+// a withdrawal hides the exact gap the sweep exists to catch.
+const WITHDRAWN_REASONS = ['not_planned']
+
 // The UTC-day floor of the window, as a gh search qualifier. Day granularity is deliberate: it is a
 // superset, so no in-window close can be lost to rounding, and the client-side exact filter still runs.
 const windowSearch = (nowMs, windowHours) =>
@@ -345,9 +360,17 @@ const scanUnattestedClosures = async ({
     number: i.number,
     closedAt: i.closedAt,
     state: tickState(i.body),
+    reason: `${i.stateReason ?? ''}`.trim().toLowerCase(),
   }))
+  // #161: split the withdrawal population out BEFORE any accusation is derived, so it is counted
+  // rather than filtered-by-absence and cannot reach either list a reader might act on. A row from a
+  // caller that never learned the field lands on the accusing side, which keeps every pre-#161 fixture
+  // and every older gh behaving exactly as it did before.
+  const isWithdrawn = (r) => WITHDRAWN_REASONS.includes(r.reason)
+  const withdrawn = classified.filter(isWithdrawn)
+  const live = classified.filter((r) => !isWithdrawn(r))
   const byNewest = (a, b) => Date.parse(b.closedAt) - Date.parse(a.closedAt)
-  const unattested = classified
+  const unattested = live
     .filter((r) => r.state.attestable && r.state.unticked > 0)
     .map((r) => ({
       number: r.number,
@@ -363,7 +386,7 @@ const scanUnattestedClosures = async ({
   // previously tell "nothing was missing" from "6 of the 15 closures in the window were never
   // eligible to appear" (measured at `f3a4e04`). The `unreadable-heading` shape is the loud one: it
   // means tick boxes exist that the close guard could not see, which is a bypass rather than a style.
-  const unattestable = classified
+  const unattestable = live
     .filter((r) => !r.state.attestable)
     .map((r) => ({
       number: r.number,
@@ -489,7 +512,11 @@ const scanUnattestedClosures = async ({
     `${deliveries} closed issue(s) scanned${swept}, ` +
     witness +
     `${inWindow.length} closed within the last ${windowHours}h, ${unattested.length} unattested, ` +
-    `${unattestable.length} with no tick mechanism (not gaps: #99 ratified them)`
+    `${unattestable.length} with no tick mechanism (not gaps: #99 ratified them), ` +
+    // #151's rule, applied to a population this change filters: a filtered-zero names what it
+    // filtered, so "0 unattested" can never again be read as "nothing was missing" when the window
+    // was in fact full of withdrawals.
+    `${withdrawn.length} withdrawn (not_planned), not accused (#161)`
   const list = shown
     .map((s) => {
       const ev = rowEvidence.get(s.number) || { none: true }
@@ -499,7 +526,7 @@ const scanUnattestedClosures = async ({
       // absent from that it was looked for and could not be located. pitcairn #1242 is the live third
       // state: all five of its candidates merged AFTER its 06:47:54Z close, so nothing resolved.
       return ev.pr && ev.boxes > 0
-        ? `#${s.number} ${s.ticked}/${s.boxes} in the issue body, ${ev.ticked}/${ev.boxes} in PR #${ev.pr} - port the ticks or annotate why each box cannot be met`
+        ? `#${s.number} ${s.ticked}/${s.boxes} in the issue body, ${ev.ticked}/${ev.boxes} in PR #${ev.pr} - port them into the issue body, ticks are what the sweep counts (#161)`
         : ev.pr
           ? `#${s.number} ${s.ticked}/${s.boxes} ticked, closed ${s.closedAt} (PR #${ev.pr} resolves as the closer at merge ${ev.mergedAt} but its body ${ev.hasSection ? 'has a Done-when section with nothing ticked' : 'carries no Done-when section at all'} - the ticks are not in any closing PR)`
           : `#${s.number} ${s.ticked}/${s.boxes} ticked, closed ${s.closedAt} (no closing PR found: no PR mentioning this issue merged before the close, so it was closed by hand, by a coord done verb, or by a raw commit - the issue body is the only evidence)`
@@ -532,8 +559,8 @@ const scanUnattestedClosures = async ({
         ? `unattested-closure scan: ${summary}`
         : `unattested-closure scan: ${summary} - ${list}${tail}: ${
             anyPrEvidence
-              ? "for the rows above the closing PR body carries the ticks the sweep could not see in the issue - port them or annotate why each box cannot be met; #94's guard only covers the verb"
-              : "these closed without anyone ticking a Done-when box, and #94's guard only covers the verb, so tick each box with its measurement or annotate why it cannot be met"
+              ? 'for the rows above the closing PR body carries the ticks the sweep could not see in the issue - port them into the issue body, because membership counts ticks and an annotation alone keeps this line firing by design (#161)'
+              : "these closed without anyone ticking a Done-when box, and #94's guard only covers the verb, so tick each box with its measurement; a duplicate or superseded issue belongs closed as `not_planned`, which this sweep suppresses (#161), and prose alone will not clear this line"
           }`) + headingWarning,
   }
 }

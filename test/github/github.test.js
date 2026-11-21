@@ -48,7 +48,11 @@ describe('GitHubClient', () => {
     // unattested" that no other arm can see, because every fixture already carries the key by hand.
     const jsonArg = capturedArgs[capturedArgs.indexOf('--json') + 1]
     const fields = jsonArg.split(',')
-    for (const f of ['number', 'body', 'closedAt']) {
+    // #161 adds `stateReason` to this same list, and it belongs in the loop rather than in a runner
+    // arm: gh answers it on the LIST endpoint, so the sweep's only source for "was this a withdrawal"
+    // is this projection. A merge that drops the key does not error - every NOT_PLANNED close simply
+    // reads as live and the accusation count goes back up with nothing red anywhere.
+    for (const f of ['number', 'body', 'closedAt', 'stateReason']) {
       assert.ok(
         fields.includes(f),
         `listIssues must select ${f}: got ${jsonArg}`,
