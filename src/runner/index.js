@@ -2,6 +2,7 @@ const { checkBacklogAvailability } = require('./preflight')
 const { waitInterruptible } = require('./countdown')
 const { runPiSession } = require('./session')
 const { SessionTracker } = require('./sessionTracker')
+const { nextProgressState } = require('./progressGuard')
 
 // #90: join the per-PR advice that `preflight` computed - do NOT re-derive causes here, or this renderer
 // drifts from the classifier exactly the way #87's writer and #87's matcher did. Cap the list so a
@@ -66,6 +67,12 @@ const Runner = ({
 
     let cycle = 1
     let previousReason = null
+    let progressState = {
+      streak: 0,
+      forceFreshSession: false,
+      waitSeconds: 10,
+      waitMessage: '[Session Complete] Waiting 10s cooldown before next cycle.',
+    }
 
     try {
       while (cycle <= maxCycles) {
@@ -102,12 +109,13 @@ const Runner = ({
 
         // 2. Work available -> Run Pi session
         const isNewTask =
-          previousReason === 'owned_claims' &&
-          availability.reason === 'unclaimed_tasks'
+          progressState.forceFreshSession ||
+          (previousReason === 'owned_claims' &&
+            availability.reason === 'unclaimed_tasks')
         previousReason = availability.reason
 
         if (sessionTracker) sessionTracker.updateStatus(agent, 'running')
-        await sessionImpl({
+        const sessionResult = await sessionImpl({
           targetPath,
           prompt: resolveCyclePrompt({
             isNewTask,
@@ -123,12 +131,17 @@ const Runner = ({
         })
 
         cycle += 1
+        progressState = nextProgressState(progressState.streak, sessionResult)
 
-        // 10s cooldown between sessions
-        if (sessionTracker) sessionTracker.updateStatus(agent, 'cooldown')
+        // Cooldown between sessions (escalates to backoff when repeated cycles do zero tool work)
+        if (sessionTracker)
+          sessionTracker.updateStatus(
+            agent,
+            progressState.waitSeconds > 10 ? 'waiting (idle)' : 'cooldown',
+          )
         const cancelledCooldown = await waitImpl(
-          10,
-          '[Session Complete] Waiting 10s cooldown before next cycle.',
+          progressState.waitSeconds,
+          progressState.waitMessage,
         )
         if (cancelledCooldown)
           return { stopped: true, reason: 'user_exit', cycle }

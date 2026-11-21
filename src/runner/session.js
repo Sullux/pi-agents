@@ -1,6 +1,7 @@
 const { spawn } = require('node:child_process')
 const path = require('node:path')
 const { syncCompactionSettings } = require('../config/compaction')
+const { SessionActivityProbe } = require('./sessionActivity')
 
 const runPiSession = async ({
   targetPath,
@@ -11,6 +12,7 @@ const runPiSession = async ({
   continueSession = true,
   env = {},
   spawnImpl = spawn,
+  activityProbe = SessionActivityProbe(),
 } = {}) => {
   const extensionPath = path.resolve(
     __dirname,
@@ -41,6 +43,8 @@ const runPiSession = async ({
     PI_AUTO_EXIT: '1',
   }
 
+  const before = activityProbe.snapshot(targetPath)
+
   return new Promise((resolve, reject) => {
     const child = spawnImpl('pi', args, {
       cwd: targetPath,
@@ -49,7 +53,8 @@ const runPiSession = async ({
     })
 
     child.on('close', (code) => {
-      resolve({ code })
+      const { hadToolUse } = activityProbe.inspectDelta(targetPath, before)
+      resolve({ code, hadToolUse })
     })
 
     child.on('error', (err) => {

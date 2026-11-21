@@ -303,3 +303,59 @@ describe('Runner: closure note reaches the prompt (#99)', () => {
     assert.ok(prompt.includes('UNKNOWN, not clean'), prompt)
   })
 })
+
+describe('Runner: zero-tool no-progress loop breaker', () => {
+  it('breaks out of --continue after 2 zero-tool cycles and backs off if fresh session also stalls', async () => {
+    const capturedSessions = []
+    const waits = []
+    const issues = [
+      {
+        number: 1288,
+        labels: [{ name: 'status:unclaimed' }, { name: 'type:bug' }],
+        comments: [],
+      },
+    ]
+
+    const mockGithub = {
+      listIssues: async (options = {}) =>
+        (options.state || 'open') === 'closed' ? [] : issues,
+      listPrs: async () => [],
+    }
+
+    const runner = Runner({
+      github: mockGithub,
+      agent: 'echo',
+      project: 'pp',
+      targetPath: '/tmp/test',
+      waitImpl: async (seconds, msg) => {
+        waits.push({ seconds, msg })
+        return false
+      },
+      sessionImpl: async (opts) => {
+        capturedSessions.push(opts)
+        // Cycles 1-3 simulate collapsed "Idle" exits; Cycle 4 recovers with real tool use
+        const hadToolUse = capturedSessions.length === 4
+        return { code: 0, hadToolUse }
+      },
+    })
+
+    await runner.runLoop({ maxCycles: 5 })
+    assert.equal(capturedSessions.length, 5)
+
+    // Cycles 1 & 2 keep --continue
+    assert.equal(capturedSessions[0].continueSession, true)
+    assert.equal(capturedSessions[1].continueSession, true)
+    assert.equal(waits[0].seconds, 10)
+    assert.equal(waits[1].seconds, 10)
+
+    // Cycle 3 breaks --continue (fresh session) after 2 consecutive zero-tool exits
+    assert.equal(capturedSessions[2].continueSession, false)
+    // Cycle 3 still returned hadToolUse: false, so backoff kicks in (60s) and Cycle 4 stays fresh
+    assert.equal(waits[2].seconds, 60)
+    assert.equal(capturedSessions[3].continueSession, false)
+
+    // Cycle 4 recovered (hadToolUse: true), so wait returns to 10s and Cycle 5 resumes --continue
+    assert.equal(waits[3].seconds, 10)
+    assert.equal(capturedSessions[4].continueSession, true)
+  })
+})
