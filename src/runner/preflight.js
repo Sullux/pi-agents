@@ -270,15 +270,62 @@ const scanUnattestedClosures = async ({
   )
   const shown = unattested.slice(0, MAX_CLOSURE_LINES)
   const dropped = unattested.length - shown.length
+  // #123: the sweep's prose was generated from the issue body only, so a closing PR full of ticks read
+  // as "nobody attested anything" - false in two of three live cases at filing. Evidence resolution runs
+  // ONLY on rows already selected for display (bounded by MAX_CLOSURE_LINES, never by the closed
+  // population - #110's rule), and membership of `unattested` is unchanged: a PR body full of ticks does
+  // not clear the finding, it relocates it. A failed read is `{ none: true }`, which keeps the old
+  // wording for that row rather than inventing a location.
+  const rowEvidence = new Map()
+  for (const row of shown) {
+    let evidence = { none: true }
+    try {
+      const closedAtMs = Date.parse(row.closedAt)
+      const events = await github.issueTimeline(row.number)
+      const candidate = (events || [])
+        .filter(
+          (e) =>
+            e.event === 'cross-referenced' &&
+            e.source?.issue?.pull_request &&
+            Number.isFinite(Date.parse(e.created_at)) &&
+            Date.parse(e.created_at) <= closedAtMs,
+        )
+        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0]
+      if (candidate) {
+        const pr = await github.pullRequest(candidate.source.issue.number)
+        const prState = tickState(pr.body || '')
+        evidence = {
+          pr: candidate.source.issue.number,
+          ticked: prState.ticked,
+          boxes: prState.boxes,
+          mergedAt: pr.mergedAt,
+        }
+      }
+    } catch {
+      evidence = { none: true }
+    }
+    rowEvidence.set(row.number, evidence)
+  }
+  const unattestedWithEvidence = unattested.map((row) => ({
+    ...row,
+    evidence: rowEvidence.get(row.number) || { none: true, unscanned: true },
+  }))
   const summary =
     `${rows.length} closed issue(s) scanned, ` +
     `${inWindow.length} closed within the last ${windowHours}h, ${unattested.length} unattested, ` +
     `${unattestable.length} with no tick mechanism (not gaps: #99 ratified them)`
   const list = shown
-    .map(
-      (s) => `#${s.number} ${s.ticked}/${s.boxes} ticked, closed ${s.closedAt}`,
-    )
+    .map((s) => {
+      const ev = rowEvidence.get(s.number) || { none: true }
+      return ev.pr && ev.boxes > 0
+        ? `#${s.number} ${s.ticked}/${s.boxes} in the issue body, ${ev.ticked}/${ev.boxes} in PR #${ev.pr} - port the ticks or annotate why each box cannot be met`
+        : `#${s.number} ${s.ticked}/${s.boxes} ticked, closed ${s.closedAt}`
+    })
     .join('; ')
+  const anyPrEvidence = shown.some((s) => {
+    const ev = rowEvidence.get(s.number) || {}
+    return Boolean(ev.pr && ev.boxes > 0)
+  })
   const tail = dropped > 0 ? ` (+${dropped} more, newest first)` : ''
   // Appended to BOTH note branches. The bypass is precisely the state where nothing accuses: four real
   // boxes under an unreadable heading leave `unattested` empty, so a warning that rode only the
@@ -293,13 +340,16 @@ const scanUnattestedClosures = async ({
     scanned: rows.length,
     inWindow: inWindow.length,
     windowHours,
-    unattested,
+    unattested: unattestedWithEvidence,
     unattestable,
     note:
       (unattested.length === 0
         ? `unattested-closure scan: ${summary}`
-        : `unattested-closure scan: ${summary} - ${list}${tail}: these closed without anyone ticking a Done-when box, and #94's guard only covers the verb, so tick each box with its measurement or annotate why it cannot be met`) +
-      headingWarning,
+        : `unattested-closure scan: ${summary} - ${list}${tail}: ${
+            anyPrEvidence
+              ? "for the rows above the closing PR body carries the ticks the sweep could not see in the issue - port them or annotate why each box cannot be met; #94's guard only covers the verb"
+              : "these closed without anyone ticking a Done-when box, and #94's guard only covers the verb, so tick each box with its measurement or annotate why it cannot be met"
+          }`) + headingWarning,
   }
 }
 

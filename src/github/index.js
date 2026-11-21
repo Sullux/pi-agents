@@ -295,6 +295,30 @@ const GitHubClient = ({
     })
   }
 
+  // #123: the other half of the evidence chain. The timeline names the closing PR; this reads ITS body,
+  // because the ticks that refute "nobody attested anything" live there on the `Closes #N`-in-the-PR-body
+  // route (measured: pitcairn #1226 closed one second after PR #1227 merged with 5/5 boxes ticked in the
+  // PR body and 0/5 in the issue body). One call, one object: `.body` is absent from every other read
+  // this client makes (`viewPr` selects headRefOid only), so it cannot be borrowed - and the jq builds
+  // the shape, so a truncated stdout fails the JSON.parse rather than reporting a bodyless PR.
+  const pullRequest = async (number) => {
+    const raw = await ghApi(
+      `repos/${activeRepo}/pulls/${number}`,
+      '{number: .number, mergedAt: .merged_at, state: .state, body: (.body // "")}',
+    )
+    if (!raw)
+      throw new Error(
+        `pullRequest(#${number}): gh api returned empty output - refusing to read a failed call as a bodyless PR.`,
+      )
+    try {
+      return JSON.parse(raw)
+    } catch (error) {
+      throw new Error(
+        `pullRequest(#${number}): unparsable JSON (${String(error?.message || error).slice(0, 80)})`,
+      )
+    }
+  }
+
   const listIssues = async (options = {}) => {
     const state = options.state || 'open'
     // #113: `|| ISSUE_PAGE_CEILING` read an explicit 0 as "not given", and the at-cap guard below compares the reply
@@ -563,6 +587,7 @@ const GitHubClient = ({
     runGh,
     issueKind,
     issueTimeline,
+    pullRequest,
     listIssues,
     listLabels,
     viewIssue,
