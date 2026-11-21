@@ -25,7 +25,7 @@ const reflog = (rows) =>
   rows.map(([sha, epochSec]) => `${sha} ${epochSec}`).join('\n')
 
 describe('#133 selfRead: the process reads its own provenance', () => {
-  it('names the loaded sha and the merge count when the boot is stale', () => {
+  it('names the loaded sha and the commit count when the boot is stale', () => {
     let gitCalls = 0
     const git = (args) => {
       gitCalls += 1
@@ -50,6 +50,44 @@ describe('#133 selfRead: the process reads its own provenance', () => {
       gitCalls > 0,
       'the seam must be TRAVELED, not re-derived at the call site',
     )
+  })
+
+  it("#146 review: a sha NOT on main's line reads as offLine, and rev-list is never consulted", () => {
+    const seen = []
+    const git = (args) => {
+      seen.push(args[0])
+      if (args[0] === 'reflog') return reflog([['eeee555', BOOT / 1000 - 2]])
+      if (args[0] === 'merge-base')
+        throw Object.assign(new Error('not an ancestor'), { status: 1 })
+      return '9'
+    }
+    const read = RunnerCurrency({
+      git,
+      proc: fakeProc([selfEntry(11)]),
+      selfPid: 11,
+    }).selfRead()
+    assert.equal(read.state, 'offLine')
+    assert.equal(read.sha, 'eeee555')
+    assert.ok(
+      !seen.includes('rev-list'),
+      'an off-line sha must not be given a behind COUNT - the count was the lie',
+    )
+  })
+
+  it('#146 review: an indeterminate lineage error (no status 1) keeps the stale path', () => {
+    const git = (args) => {
+      if (args[0] === 'reflog') return reflog([['ffff666', BOOT / 1000 - 2]])
+      if (args[0] === 'merge-base')
+        throw Object.assign(new Error('git blew up'), { code: 'ENOENT' })
+      return '4\n'
+    }
+    const read = RunnerCurrency({
+      git,
+      proc: fakeProc([selfEntry(12)]),
+      selfPid: 12,
+    }).selfRead()
+    assert.equal(read.state, 'stale')
+    assert.equal(read.behind, 4)
   })
 
   it('reports current when nothing landed since the boot', () => {
@@ -107,9 +145,24 @@ describe('#133 adviceProvenanceLine: one pure sentence shape', () => {
       sha: 'e549da9',
       behind: 2,
     })
-    assert.match(line, /loaded e549da9 \(2 merges behind origin\/main\)/)
+    assert.match(line, /loaded e549da9 \(2 commits behind origin\/main\)/)
     assert.match(line, /may predate the fix that changed it/)
     assert.match(line, /page start <agent> <project>/)
+  })
+
+  it('#146 review: offLine renders its own sentence - no behind-count, no blanket restart nudge', () => {
+    const line = adviceProvenanceLine({ state: 'offLine', sha: 'ee6243c' })
+    assert.match(line, /loaded ee6243c \(off origin\/main's line/)
+    assert.match(line, /never merged/)
+    assert.match(line, /restart is NOT automatically safe/)
+    assert.ok(
+      !line.includes('behind origin/main'),
+      `offLine must not claim a direction it cannot know: ${line}`,
+    )
+    assert.ok(
+      !line.includes('page start'),
+      `offLine must not hand out the restart verb that discards the unmerged wave's context: ${line}`,
+    )
   })
 
   it('uses the older-than-reflog phrase for unknown, and says unknown for an unreadable count', () => {
@@ -122,10 +175,10 @@ describe('#133 adviceProvenanceLine: one pure sentence shape', () => {
       sha: 'abcdef1',
       behind: NaN,
     })
-    assert.match(odd, /merge count unknown \(git could not answer\)/)
+    assert.match(odd, /commit count unknown \(git could not answer\)/)
     assert.match(
       adviceProvenanceLine({ state: 'stale', sha: 'abcdef1', behind: 1 }),
-      /1 merge behind/,
+      /1 commit behind/,
     )
   })
 })
@@ -145,7 +198,7 @@ describe('#133 composition: the rendered string rides the real path', () => {
     assert.ok(prompt.includes('Review owed on 1 open PR'), prompt)
     assert.ok(
       prompt.includes(
-        "Advice provenance: this runner process's code is loaded feedfa1 (3 merges behind origin/main)",
+        "Advice provenance: this runner process's code is loaded feedfa1 (3 commits behind origin/main)",
       ),
       prompt,
     )
@@ -233,7 +286,7 @@ describe('#133 the loop threads the seam through the real Runner', () => {
       'the per-cycle path must travel the injected seam',
     )
     assert.ok(
-      captured.prompt.includes('loaded cafe123 (6 merges behind origin/main)'),
+      captured.prompt.includes('loaded cafe123 (6 commits behind origin/main)'),
       captured.prompt,
     )
   })

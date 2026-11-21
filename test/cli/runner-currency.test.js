@@ -98,7 +98,7 @@ describe('runner currency census (#130)', () => {
     )
   })
 
-  it('reports the loaded commit with the merge count for a runner that CAN warn', () => {
+  it('reports the loaded commit with the commit count for a runner that CAN warn', () => {
     const table = rows()
     table[`rev-list --count ${'c'.repeat(40)}..origin/main`] = '7'
     const rc = RunnerCurrency({
@@ -107,7 +107,33 @@ describe('runner currency census (#130)', () => {
       selfPid: 1,
     })
     const text = rc.describe()
-    assert.match(text, /loaded c{7} \(7 merges behind\)/, `rendered: ${text}`)
+    assert.match(text, /loaded c{7} \(7 commits behind\)/, `rendered: ${text}`)
+  })
+
+  it("#146 review: a sibling loaded OFF main's line prints the lineage fact, not a count", () => {
+    const table = rows()
+    table[`rev-list --count ${'c'.repeat(40)}..origin/main`] = '1'
+    table[
+      `merge-base --is-ancestor ${'c'.repeat(40)}..origin/main`.replace(
+        '..',
+        ' ',
+      )
+    ] = Object.assign(new Error('not an ancestor'), { status: 1 })
+    const rc = RunnerCurrency({
+      git: gitFrom(table),
+      proc: procOf([{ ...runner(202), bootEpochMs: REF_EPOCH + 200_000 }]),
+      selfPid: 1,
+    })
+    const text = rc.describe()
+    assert.match(
+      text,
+      /loaded c{7} \(off origin\/main's line\)/,
+      `rendered: ${text}`,
+    )
+    assert.ok(
+      !/\(1 commits? behind\)/.test(text),
+      `the unmerged tip must not read as a one-commit lag: ${text}`,
+    )
   })
 
   it('prints the reflog-window sentence instead of a fabricated sha', () => {
