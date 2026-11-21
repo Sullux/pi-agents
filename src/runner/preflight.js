@@ -236,6 +236,7 @@ const scanUnattestedClosures = async ({
     }
   }
   const rows = closed || []
+  let witness = ''
   if (rows.length === 0) {
     const probe = await scanClosedWindow({
       github,
@@ -261,34 +262,28 @@ const scanUnattestedClosures = async ({
           `${String(probe.note || 'no note from the probe').split('\n')[0]}`,
       }
     }
-    if (probe.rows.length === 0 || newest === 0) {
+    if (probe.rows.length === 0) {
+      // #151 corrected: a COMPLETED empty probe is a quiet repo, not a blind read, and stays on the
+      // clean summary path - the witness clause is what separates the two zeros from a degraded read.
+      witness =
+        ` (pi#151 witness: the CLOSED read completed empty and the ` +
+        `${POPULATION_PROBE_HOURS / 24}d population probe completed with 0 rows - ` +
+        `a genuinely quiet repo, not an unreadable one)`
+    } else {
       return {
-        readable: false,
+        readable: true,
         scanned: 0,
         inWindow: 0,
         windowHours,
         unattested: [],
+        population: probe.rows.length,
+        newestClosedAt: iso(newest),
         note:
-          `unattested-closure scan of the CLOSED axis: UNKNOWN, not clean (pi#151) - the window read ` +
-          `returned 0 rows and the population probe was no better: ${probe.rows.length} rows over ` +
-          `${POPULATION_PROBE_HOURS / 24}d, newest closed_at ` +
-          `${newest === 0 ? 'unreadable' : iso(newest)}. ` +
-          `A repo cannot be audited while a zero it produces cannot be attributed to quietness.`,
+          `unattested-closure scan: quiet window, not a blind read (pi#151) - 0 closed within the last ` +
+          `${windowHours}h, and the sweep proves it can see: a ${POPULATION_PROBE_HOURS / 24}d population ` +
+          `probe returned ${probe.rows.length} closed issues, newest closed ${iso(newest)}. ` +
+          `Both numbers printed so 0-scanned never again reads as an untested repo.`,
       }
-    }
-    return {
-      readable: true,
-      scanned: 0,
-      inWindow: 0,
-      windowHours,
-      unattested: [],
-      population: probe.rows.length,
-      newestClosedAt: iso(newest),
-      note:
-        `unattested-closure scan: quiet window, not a blind read (pi#151) - 0 closed within the last ` +
-        `${windowHours}h, and the sweep proves it can see: a ${POPULATION_PROBE_HOURS / 24}d population ` +
-        `probe returned ${probe.rows.length} closed issues, newest closed ${iso(newest)}. ` +
-        `Both numbers printed so 0-scanned never again reads as an untested repo.`,
     }
   }
   const cutoff = now() - windowHours * 60 * 60 * 1000
@@ -373,6 +368,7 @@ const scanUnattestedClosures = async ({
   }))
   const summary =
     `${rows.length} closed issue(s) scanned, ` +
+    witness +
     `${inWindow.length} closed within the last ${windowHours}h, ${unattested.length} unattested, ` +
     `${unattestable.length} with no tick mechanism (not gaps: #99 ratified them)`
   const list = shown

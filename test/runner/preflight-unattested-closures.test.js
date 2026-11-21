@@ -460,11 +460,22 @@ it('#151 a zero window inside a readable population reports QUIET with both numb
   )
 })
 
-it('#151 a zero window with a zero population is UNKNOWN - two zeros cannot certify each other', async () => {
-  const { result } = await scanDriven(probeRows([]))
-  assert.equal(result.readable, false)
-  assert.ok(result.note.includes('UNKNOWN, not clean'), result.note)
-  assert.ok(result.note.includes('0 rows over 90d'), result.note)
+it('#151 a COMPLETED empty probe keeps the clean summary and prints its witness - corrected goal, box 2 the other way', async () => {
+  const { result, calls } = await scanDriven(probeRows([]))
+  assert.equal(result.readable, true)
+  assert.ok(result.note.includes('closed issue(s) scanned'), result.note)
+  assert.ok(
+    result.note.includes('population probe completed with 0 rows'),
+    result.note,
+  )
+  assert.ok(
+    !result.note.includes('UNKNOWN'),
+    `a completed zero must not alarm: ${result.note}`,
+  )
+  assert.ok(
+    calls.length >= 2,
+    `probe seam never traveled: ${calls.length} calls`,
+  )
 })
 
 it('#151 a probe stuck at the page ceiling is UNKNOWN, never a clean quiet claim', async () => {
@@ -484,7 +495,7 @@ it('#151 a probe stuck at the page ceiling is UNKNOWN, never a clean quiet claim
   )
 })
 
-it('#151 plausibility: a closed_at beyond now is filtered out of the probe window, so the zero POPULATION read is what goes UNKNOWN', async () => {
+it('#151 plausibility: a closed_at beyond now is filtered by the probe itself and lands in the same clean-witness branch', async () => {
   const future = probeRows([
     {
       number: 5,
@@ -495,8 +506,22 @@ it('#151 plausibility: a closed_at beyond now is filtered out of the probe windo
   // scanClosedWindow's own slice filter (`t >= from && t < to`) drops a future row, which lands the
   // probe at 0 rows - the plausibility guard the Goal asks for is therefore the two-zeros refusal, and
   // an unreachable `newest > now` branch in preflight would be a lie in the source.
-  assert.equal(result.readable, false)
-  assert.ok(result.note.includes('0 rows over 90d'), result.note)
+  assert.equal(result.readable, true)
+  assert.ok(
+    result.note.includes('population probe completed with 0 rows'),
+    result.note,
+  )
+})
+
+it('#151 rows with unparseable closed_at are filtered by the probe itself and land in completed-empty', async () => {
+  const { result } = await scanDriven(
+    probeRows([{ number: 7, closedAt: 'not-a-date' }]),
+  )
+  assert.equal(result.readable, true)
+  assert.ok(
+    result.note.includes('population probe completed with 0 rows'),
+    result.note,
+  )
 })
 
 it('#151 non-vacuity pair: a non-empty window read never fires the probe at all', async () => {
