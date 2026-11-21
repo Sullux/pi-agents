@@ -18,8 +18,17 @@ describe('Runner: Loop Execution and Continuation Prompts', () => {
     ]
 
     const mockGithub = {
-      listIssues: async (options = {}) =>
-        (options.state || 'open') === 'closed' ? [] : issues,
+      listIssues: async (options = {}) => {
+        if ((options.state || 'open') !== 'closed') return issues
+        // pi#151: a zero CLOSED window is UNKNOWN unless the population probe sees a population.
+        // This world wants the CLEAN branch, so feed the two-bound probe slice one recent close.
+        if (options.search && options.search.includes(' closed:<=')) {
+          return [
+            { number: 9, closedAt: new Date(Date.now() - 86400000).toISOString() },
+          ]
+        }
+        return []
+      },
       listPrs: async () => [],
     }
 
@@ -45,7 +54,7 @@ describe('Runner: Loop Execution and Continuation Prompts', () => {
     assert.ok(
       rest
         .join('\n')
-        .includes('unattested-closure scan: 0 closed issue(s) scanned'),
+        .includes('unattested-closure scan: quiet window, not a blind read'),
       `the scan's population line must be present, even when clean: ${capturedSession.prompt}`,
     )
     assert.equal(capturedSession.continueSession, true)
@@ -75,7 +84,17 @@ describe('Runner: Loop Execution and Continuation Prompts', () => {
       listIssues: async (options = {}) => {
         // #99: the scan reads the closed axis with its own call - a mock that ignored `state` handed
         // it open rows and the report counted them as closures.
-        if ((options.state || 'open') === 'closed') return []
+        if ((options.state || 'open') === 'closed') {
+          if (options.search && options.search.includes(' closed:<=')) {
+            return [
+              {
+                number: 9,
+                closedAt: new Date(Date.now() - 86400000).toISOString(),
+              },
+            ]
+          }
+          return []
+        }
         return cycleCount === 0 ? issuesCycle1 : issuesCycle2
       },
       listPrs: async () => [],
@@ -106,7 +125,7 @@ describe('Runner: Loop Execution and Continuation Prompts', () => {
     assert.ok(
       contRest
         .join('\n')
-        .includes('unattested-closure scan: 0 closed issue(s) scanned'),
+        .includes('unattested-closure scan: quiet window, not a blind read'),
       `clean sweeps stay visible so absence is not mistaken for blindness: ${capturedSessions[0].prompt}`,
     )
     assert.equal(capturedSessions[0].continueSession, true)
@@ -131,8 +150,17 @@ describe('Runner: Loop Execution and Continuation Prompts', () => {
     ]
 
     const mockGithub = {
-      listIssues: async (options = {}) =>
-        (options.state || 'open') === 'closed' ? [] : issues,
+      listIssues: async (options = {}) => {
+        if ((options.state || 'open') !== 'closed') return issues
+        // pi#151: a zero CLOSED window is UNKNOWN unless the population probe sees a population.
+        // This world wants the CLEAN branch, so feed the two-bound probe slice one recent close.
+        if (options.search && options.search.includes(' closed:<=')) {
+          return [
+            { number: 9, closedAt: new Date(Date.now() - 86400000).toISOString() },
+          ]
+        }
+        return []
+      },
       listPrs: async () => [],
     }
 
