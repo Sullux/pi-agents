@@ -66,14 +66,24 @@ it('the closed read is bounded server-side: options.search starts with the close
 
 it('the search floor is a UTC day floored BELOW the cutoff, so the window is never under-read', async () => {
   const { calls } = await scanDriven([], { windowHours: 6 })
-  const floor = Date.parse(calls[0].search.slice('closed:>='.length))
+  // #150: the window read is now a SLICE read, so its search carries an upper bound as well. The
+  // invariant this arm was written to hold is untouched - the server-side floor must never sit above the
+  // cutoff - it just has to be read off the lower half of the predicate now. Asserting the upper bound is
+  // NEW, and it is the stronger half: the per-slice ceiling is the thing that makes a read small enough
+  // to be complete, so dropping it would re-open the at-cap refusal this whole lane exists to close.
+  const lower = calls[0].search.split(' closed:<=')[0]
+  const floor = Date.parse(lower.slice('closed:>='.length))
   assert.ok(
     Number.isFinite(floor),
     `search floor is not a parseable date: ${calls[0].search}`,
   )
   assert.equal(
-    calls[0].search,
+    lower,
     `closed:>=${new Date(FIXED_NOW - 6 * HOUR).toISOString().slice(0, 10)}`,
+  )
+  assert.ok(
+    calls[0].search.includes(' closed:<='),
+    `the slice read lost its upper bound, so the window is unbounded again: ${calls[0].search}`,
   )
   const cutoff = FIXED_NOW - 6 * HOUR
   assert.ok(
@@ -174,29 +184,33 @@ it('the sweep really reaches gh with the predicate: an argv pin through the exec
     },
     repo: 'Sullux/pitcairn-portal',
   })
-  const { result } = await scanDriven(
-    async (options) => {
-      // pi#151: the population probe fires on the now-empty window read; short-circuit it with a
-      // readable population so this arm keeps asserting the WINDOW call's argv, not a probe slice.
-      if (options.search && options.search.includes(' closed:<=')) {
-        return [{ number: 1, closedAt: '2026-11-07T00:00:00.000Z' }]
-      }
-      await c.listIssues(options)
-      return []
-    },
-    { windowHours: 6 },
-  )
+  // #150: every read the sweep makes now goes through the scanner, so the short-circuit fake that used to
+  // protect this arm from probe slices is obsolete - and obsolete in the useful direction. What has to
+  // stay true is that a REAL gh invocation carries a window predicate, which is the reason a wide window
+  // stopped being refused. Asserted over EVERY list call rather than the last one: a bare ceiling raise
+  // would still pass a single-call check if any later read went out unbounded.
+  const { result } = await scanDriven((o) => c.listIssues(o).then(() => []), {
+    windowHours: 6,
+  })
   assert.equal(result.readable, true)
-  const list = argv[argv.length - 1]
-  assert.ok(
-    list.includes('--search'),
-    `no --search reached gh: ${list.join(' ')}`,
-  )
+  const lists = argv.filter((a) => a.includes('list'))
+  assert.ok(lists.length >= 1, `no gh list invocation reached the seam`)
+  for (const list of lists) {
+    assert.ok(
+      list.includes('--search'),
+      `a read went out with no predicate at all: ${list.join(' ')}`,
+    )
+    assert.ok(
+      list[list.indexOf('--search') + 1].startsWith('closed:>='),
+      `the predicate is not a window floor: ${list.join(' ')}`,
+    )
+  }
+  const first = lists[0]
   assert.equal(
-    list[list.indexOf('--search') + 1],
+    first[first.indexOf('--search') + 1].split(' ')[0],
     `closed:>=${new Date(FIXED_NOW - 6 * HOUR).toISOString().slice(0, 10)}`,
   )
-  assert.ok(list.includes('closed'), 'the read lost its state')
+  assert.ok(first.includes('closed'), 'the read lost its state')
 })
 
 // #114: #99 ratified that box-less closures are not gaps, and that decision is preserved exactly here -
@@ -498,7 +512,14 @@ it('#151 a COMPLETED empty probe keeps the clean summary and prints its witness 
 
 it('#151 a probe stuck at the page ceiling is UNKNOWN, never a clean quiet claim', async () => {
   const atCap = async (o) => {
-    if (o.search && o.search.includes(' closed:<=')) {
+    // #150 changes which read is which: the sweep's OWN window call now carries ` closed:<=`, so that
+    // token can no longer mean "this is the probe". The discriminator is the SPAN - the population probe
+    // asks for 90 days, the default window asks for 6 - which keeps this arm testing what #151 built it
+    // to test: a window read that COMPLETES EMPTY against a population the probe cannot read.
+    const m = /closed:>=(\S+) closed:<=(\S+)/.exec(o.search || '')
+    const wideSpan =
+      m && Date.parse(m[2]) - Date.parse(m[1]) > 24 * 60 * 60 * 1000
+    if (wideSpan) {
       throw new Error(
         'gh issue list returned exactly 500 issues on the closed axis',
       )
@@ -778,5 +799,279 @@ it('#158 the probe is capped, so one row cannot fan out into the whole mention h
     result.unattested[0].evidence.pr,
     705,
     'within the cap the nearest merge must still win',
+  )
+})
+
+// ---------------------------------------------------------------------------
+// pi#150: the CLOSED sweep reads its window through `scanClosedWindow`.
+//
+// Box 4 lives here as a COMMENT, because the live 90-day driver must stay outside the suite: a population
+// count measured from `Sullux/pitcairn-portal` is a fact about a moving repo, and pinning one would make
+// main red the next time anybody closes an issue. The driver is /tmp/bravo-150-live.cjs (real GitHubClient,
+// not a fake) and the measurement it produced on 2026-11-21T18:59:39Z at head `dc960d0`. That sha is not this
+// PR's tip (amends moved it), so the claim is stated where it can be checked: `src/runner/preflight.js` is
+// byte-identical from `dc960d0` to the shipped head - `git diff --numstat dc960d0 HEAD -- src/runner/preflight.js`
+// is empty - and only comments differ in this file, so the live reading describes the code this PR ships.
+// A/B in one run, against `Sullux/pitcairn-portal`:
+//   A. the pre-wiring route, one listIssues read of `closed:>=<90d floor>` -> THREW after 26.2 s:
+//      "coord: gh issue list returned exactly 500 issues on the closed axis for Sullux/pitcairn-portal".
+//   B. the wired sweep, same window -> { readable: true, scanned: 581, inWindow: 581, slices: 3, calls: 3,
+//      unattested: 228, unattestable: 97 } in 55.2 s, note carrying "swept in 2 slice(s) over 3 call(s)".
+// A is the defect #148 measured and #150 exists to close; B is the same request answered with rows. Both
+// numbers are dated observations about a live board, not assertions - nothing below reads them.
+//
+// One design note, because it cost a red in a file this issue does not declare: my first wiring made
+// `scanned` the deduped in-window union, which is where the scanner now drops the day-floor slack. That
+// broke `test/runner/preflight.test.js`'s "treats a row with no closedAt as outside the window" arm, whose
+// own comment says the scanned number MUST survive a delivery that is not window membership - so `scanned`
+// is deliveries (sum of the reads that answered), unchanged, and the arm at the end of this file pins that
+// the slack row still counts as a scan while staying out of the accused set.
+// ---------------------------------------------------------------------------
+
+const DAY = 24 * 60 * 60 * 1000
+
+// A fake that behaves like `gh issue list` on the closed axis instead of like a stub: it honours BOTH
+// day-floored bounds of the search string, and refuses with the at-cap error when its own answer would
+// clear the page ceiling. #150 cannot be tested against a fake that ignores `closed:<=` - the first slice
+// would swallow the whole window, the bisect would never happen, and a green arm would prove nothing about
+// the split it claims to exercise.
+const ghLike = (population, { cap = Infinity } = {}) => {
+  const log = []
+  return {
+    log,
+    listIssues: async (o) => {
+      const m = /closed:>=(\S+)(?: closed:<=(\S+))?/.exec(o.search || '')
+      if (!m) throw new Error('the read lost its closed:>= predicate entirely')
+      const from = Date.parse(m[1])
+      // `closed:<=DAY` is inclusive of that whole UTC day, which is exactly why adjacent slices overlap by
+      // up to a day and the scanner's dedup Map is load-bearing rather than defensive.
+      const to = m[2] ? Date.parse(m[2]) + DAY : from + DAY
+      const hit = population
+        .filter((r) => {
+          const t = Date.parse(r.closedAt)
+          return Number.isFinite(t) && t >= from && t < to
+        })
+        .sort((a, b) => Date.parse(b.closedAt) - Date.parse(a.closedAt))
+      log.push({ search: o.search, returned: hit.length })
+      if (hit.length >= cap) {
+        throw new Error(
+          `gh issue list returned exactly ${hit.length} issues on the closed axis`,
+        )
+      }
+      return hit
+    },
+    listPrs: async () => [],
+    viewPr: async () => null,
+    viewIssue: async () => null,
+  }
+}
+
+const sweepWith = async (github, options = {}) => {
+  const result = await scanUnattestedClosures({
+    github,
+    now: () => FIXED_NOW,
+    ...options,
+  })
+  assert.ok(
+    github.log.length >= 1,
+    'the sweep never reached the read seam, so nothing below was measured',
+  )
+  return { result, log: github.log }
+}
+
+const NINETY_DAYS = 2160
+
+it('#150 an at-cap leaf at or below the bisect floor makes the SWEEP report UNKNOWN, closed-axis worded (#135 survives)', async () => {
+  // Every read refuses, including the first 6h slice - which is already narrower than the scanner's
+  // minSliceHours floor, so the bisection has nowhere to go and the leaf IS the floor. This is the state
+  // #135 was written about: the sweep must say UNKNOWN about the CLOSED axis, must not print a clean zero,
+  // and must not borrow the OPEN-axis accusation that belongs to the scope gate.
+  const fake = ghLike([], { cap: 0 })
+  const { result } = await sweepWith(fake)
+  assert.equal(
+    result.readable,
+    false,
+    'an unreadable window must never report a clean sweep',
+  )
+  assert.equal(result.scanned, 0)
+  assert.deepEqual(result.unattested, [])
+  assert.ok(
+    !/\b0 unattested\b/.test(result.note),
+    `a failed read printed a clean count: ${result.note}`,
+  )
+  assert.match(result.note, /UNKNOWN, not clean/)
+  assert.ok(result.note.includes('CLOSED axis'), result.note)
+  assert.ok(
+    result.note.includes('closed:>='),
+    'the note must still name the window it asked for',
+  )
+  assert.ok(
+    result.note.includes('bisect floor'),
+    `the closed-axis at-cap wording is missing, so this reads like the #135 open-axis refusal: ${result.note}`,
+  )
+  // The two shapes #135 keeps apart. The OPEN sentence belongs to `src/github/index.js` and to the scope
+  // gate's collision set; a closure sweep has neither, and emitting it would send a reader hunting a
+  // ceiling raise that is not the problem.
+  assert.ok(!result.note.includes('OPEN set is TRUNCATED'), result.note)
+  assert.ok(!result.note.includes('invisible to the scope gate'), result.note)
+  // non-vacuity: the refusal has to have TRAVELED the seam, not merely been asserted about it. At 6h the
+  // first slice is already below the 12h bisect floor, so the scanner must make exactly one read and VISIT
+  // zero slices - the signature of stopping AT the floor rather than bisecting down to it. The scanner's own
+  // diagnostic (carried into the note) is what proves the at-cap branch ran.
+  assert.equal(
+    result.calls,
+    1,
+    `expected one read at the floor, got ${result.calls}`,
+  )
+  assert.equal(
+    result.slices,
+    0,
+    'a slice below the floor cannot bisect, so nothing should be visited',
+  )
+  assert.ok(
+    result.note.includes('on a slice of 6h'),
+    `the window scanner's own diagnostic is missing, so this note may be prose rather than a measurement: ${result.note}`,
+  )
+})
+
+it('#150 a wide window that refuses the first read yields the SAME rows as one un-truncated read', async () => {
+  // The differential IS the assertion. Hand-written expectations would only prove the bisect is stable;
+  // comparing a bisected sweep against a single complete read of the same population proves the split
+  // neither lost nor duplicated a close - which is the whole claim of the wiring.
+  const population = [1, 2, 3, 4, 5, 6].map((n) => ({
+    number: 3000 + n,
+    closedAt: new Date(FIXED_NOW - n * 14 * DAY).toISOString(),
+    body: body(n % 2 === 0 ? 4 : 0, 4),
+  }))
+  const whole = await sweepWith(ghLike(population), {
+    windowHours: NINETY_DAYS,
+  })
+  const split = await sweepWith(ghLike(population, { cap: 4 }), {
+    windowHours: NINETY_DAYS,
+  })
+
+  assert.equal(whole.result.readable, true, whole.result.note)
+  assert.equal(
+    whole.result.slices,
+    1,
+    'the unbounded population must be one read, or the baseline is not a baseline',
+  )
+  // the baseline itself has to carry signal, or two empty lists would agree vacuously
+  assert.equal(whole.result.scanned, 6)
+  assert.ok(
+    whole.result.unattested.length >= 1,
+    'the fixture produced no accusation to compare',
+  )
+
+  assert.equal(
+    split.result.readable,
+    true,
+    `the bisected sweep refused: ${split.result.note}`,
+  )
+  assert.equal(
+    split.result.calls,
+    3,
+    'expected one refusal plus both halves answered',
+  )
+  // `slices` counts everything VISITED - the refused parent plus the two leaves - so 3 here is the honest
+  // number and the note, which counts only the slices that ANSWERED, says 2. Pinned together on purpose:
+  // if the two ever disagree about the same run, one of them is lying to the reader.
+  assert.equal(split.result.slices, 3, 'one refused parent plus two leaves')
+  assert.ok(
+    split.result.note.includes('swept in 2 slice(s) over 3 call(s)'),
+    `the note miscounts the sweep: ${split.result.note}`,
+  )
+  assert.equal(
+    split.result.scanned,
+    whole.result.scanned,
+    'the split lost or duplicated a close',
+  )
+  assert.equal(split.result.inWindow, whole.result.inWindow)
+  assert.deepEqual(
+    split.result.unattested.map((u) => u.number),
+    whole.result.unattested.map((u) => u.number),
+    'the accused set changed between one read and three',
+  )
+  // and the refusal actually happened - otherwise this arm is just the baseline twice
+  assert.equal(
+    split.log[0].returned,
+    6,
+    'the first read was not at cap, so no bisection was forced and this pair proves nothing',
+  )
+})
+
+it('#150 the slice diagnostic is conditional, so the flat 6h summary sentence stays byte-identical', async () => {
+  const quiet = await sweepWith(ghLike([]), { windowHours: 6 })
+  assert.ok(
+    !quiet.result.note.includes('swept in'),
+    `a window that never bisected printed slice counts: ${quiet.result.note}`,
+  )
+  const population = [1, 2, 3, 4, 5, 6].map((n) => ({
+    number: 4000 + n,
+    closedAt: new Date(FIXED_NOW - n * 14 * DAY).toISOString(),
+    body: body(4, 4),
+  }))
+  const split = await sweepWith(ghLike(population, { cap: 4 }), {
+    windowHours: NINETY_DAYS,
+  })
+  assert.ok(
+    split.result.note.includes('swept in 2 slice(s) over 3 call(s)'),
+    `the bisect is invisible in the note: ${split.result.note}`,
+  )
+})
+
+it('#150 a 6h window costs exactly one read, and day-floor slack still counts as a delivery', async () => {
+  // The non-vacuity half of the wiring for the narrow case: a window narrower than the bisect floor must go
+  // out as ONE slice read (if it bisected, every "scanned" number below would be a sum of reads, not a read),
+  // and it must still report the 4 rows the read DELIVERED while claiming only 3 as window members. That gap
+  // is the day floor doing its job, and it is the same relationship the single read had - #150 did not move
+  // it. `1319` is the slack row: 20h old, so outside the 6h window but inside `closed:>=<floored day>`.
+  const rows = [
+    {
+      number: 1307,
+      closedAt: new Date(FIXED_NOW - 1 * HOUR).toISOString(),
+      body: body(0, 4),
+    },
+    {
+      number: 1301,
+      closedAt: new Date(FIXED_NOW - 5 * HOUR).toISOString(),
+      body: body(0, 4),
+    },
+    {
+      number: 1311,
+      closedAt: new Date(FIXED_NOW - 2 * HOUR).toISOString(),
+      body: body(4, 4),
+    },
+    {
+      number: 1319,
+      closedAt: new Date(FIXED_NOW - 20 * HOUR).toISOString(),
+      body: body(0, 4),
+    },
+  ]
+  const { result } = await sweepWith(ghLike(rows), { windowHours: 6 })
+  assert.equal(result.slices, 1, 'a 6h window must not bisect')
+  assert.equal(result.calls, 1, `expected one read, got ${result.calls}`)
+  assert.equal(
+    result.scanned,
+    4,
+    'every delivered row counts as a scan, in window or not',
+  )
+  assert.equal(
+    result.inWindow,
+    3,
+    'the slack row must not be claimed as a window member',
+  )
+  // 1319 was DELIVERED (it is in `scanned`) and is still not accused, because it is not a window member -
+  // which is the exact separation this arm exists to hold. The three in-window rows all appear: a body with
+  // every box ticked is still unattested until the ticks reach the closing PR (#99's rule), so this is not a
+  // "ticked rows drop out" assertion, it is a "window membership decides the accused set" assertion.
+  assert.deepEqual(
+    result.unattested.map((u) => u.number),
+    [1307, 1311, 1301],
+    'the accused set must be exactly the in-window rows, newest close first',
+  )
+  assert.ok(
+    !result.unattested.some((u) => u.number === 1319),
+    'the slack row was counted as a delivery and must NOT be accused',
   )
 })
