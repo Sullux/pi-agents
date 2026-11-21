@@ -1233,3 +1233,18 @@ describe('Coordination Engine: a third-party close-out does not de-own (pi-agent
     )
   })
 })
+
+// pi#157: the underscore note form gets the same pre-split protection the HTML comment form
+// won in #10, pinned in both directions.
+it('does not let a semicolon inside an `_(...)_` Files note mint a bogus path', () => {
+  assert.deepEqual(
+    parseScope('## Files\nsrc/a.js\n_(note; not a path)_'),
+    ['src/a.js'],
+    'the underscore note must be stripped before the `;` split, or its tail becomes scope',
+  )
+  assert.deepEqual(
+    parseScope('## Files\nsrc/a.js _(why; and why)_\nsrc/b.js'),
+    ['src/a.js', 'src/b.js'],
+    'a mid-line note must leave its path intact AND its prose invisible',
+  )
+})

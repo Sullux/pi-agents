@@ -66,9 +66,16 @@ const isSetextHeading = (lines, i) =>
 // contains a semicolon would otherwise be cut into extra bogus paths. Comments are a per-line
 // affair: an opening `<!--` runs to end of line, and its `-->` is dropped as a fragment above.
 const HTML_COMMENT = /[ \t]*<!--[\s\S]*/g
+// pi#157: the `_(...)_` note form deserves the same pre-split strip the HTML form got in #10,
+// because NOT_A_PATH can only see tokens that still START with `_(` - and a note carrying a
+// semicolon hands the split a tail like `more prose.)_` that no whole-line filter can recognize.
+// Measured on pi-agents #151: one `_(Files corrected ...; the declared coord path ...)_` line
+// parsed to four paths, the fourth being sixty characters of English.
+const UNDERSCORE_NOTE = /_\([^\n]*?\)_[ \t]*/g
 const normalizeEntry = (line) =>
   line
     .replace(HTML_COMMENT, '')
+    .replace(UNDERSCORE_NOTE, '')
     .split(';')
     .map((part) => part.replace(BULLET, '').replace(/`/g, '').trim())
     .filter((part) => part && !NOT_A_PATH(part))
