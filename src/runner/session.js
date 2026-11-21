@@ -1,6 +1,7 @@
 const { spawn } = require('node:child_process')
 const path = require('node:path')
 const { syncCompactionSettings } = require('../config/compaction')
+const { syncModelContextOverride } = require('../config/modelOverride')
 const { SessionActivityProbe } = require('./sessionActivity')
 
 const runPiSession = async ({
@@ -25,8 +26,18 @@ const runPiSession = async ({
   if (thinking) args.push('--thinking', thinking)
   if (extensionPath) args.push('--extension', extensionPath)
 
+  const activeModel = model || 'qw/qwen3.8-max'
+  const contextWindow = env.CONTEXT_WINDOW
+    ? Number(env.CONTEXT_WINDOW)
+    : undefined
+
+  syncModelContextOverride({
+    model: activeModel,
+    contextWindow,
+  })
   syncCompactionSettings({
-    model: model || 'qw/qwen3.8-max',
+    model: activeModel,
+    contextWindow: contextWindow || 262144,
     percent: env.COMPACT_PERCENT || 60,
   })
 
