@@ -190,6 +190,10 @@ const UNATTESTED_WINDOW_HOURS = 6
 // untouched and the at-cap refusal is kept: a truncated read is still UNKNOWN, and UNKNOWN is still honest.
 const CLOSE_SCAN_LIMIT = null
 const MAX_CLOSURE_LINES = 3
+// #158: how many candidates one row may probe, nearest-merge-first, looking for a body that names
+// the issue as its closing target. Both live controls resolve on the first probe; the cap exists so
+// a single row cannot fan out into the unbounded mention history #110 keeps this loop away from.
+const CLOSER_PROBE_MAX = 3
 // pi#151: an empty window read is legitimate on a quiet day and illegitimate on a blind reader, and the
 // two arrive as the same []. The probe is the tie-breaker: a wide bounded sweep whose ONLY purpose is to
 // prove the read can see the population at all. 90d measured 573 rows across 3 slice calls at pitcairn
@@ -338,25 +342,83 @@ const scanUnattestedClosures = async ({
     try {
       const closedAtMs = Date.parse(row.closedAt)
       const events = await github.issueTimeline(row.number)
-      const candidate = (events || [])
-        .filter(
-          (e) =>
-            e.event === 'cross-referenced' &&
-            e.source?.issue?.pull_request &&
-            Number.isFinite(Date.parse(e.created_at)) &&
-            Date.parse(e.created_at) <= closedAtMs,
+      const mergeMs = (e) => Date.parse(e.source?.issue?.pull_request?.merged_at ?? '')
+      const mentionMs = (e) => Date.parse(e.created_at ?? '')
+      // #158: rank the candidates by MERGE adjacency, not by mention recency. A cross-referenced
+      // event's created_at is when the mention landed, which is not when the PR merged, so sorting
+      // mentions newest-first was answering a different question than the sentence going out.
+      // pitcairn #1248 is the measured shape, and note that its closer was never FILTERED OUT - the
+      // old filter kept it, the old SORT ranked it third: PR #1250 mentions at 07:15:47 and merges at
+      // 10:03:59Z, two seconds before the 10:04:01Z close, while the innocent PR #1245 mentions LATER
+      // at 08:30:26Z (merged 09:11, 53 minutes earlier) - so newest-mention picked #1245, whose body
+      // has no tick section at all (0/0), and the sweep accused a 4/4 closure of "0/4 ticked".
+      // #1226 is the control that says this is not a re-roll of the same dice: nearest-merge-before
+      // close there is #1227, which newest-mention also happened to pick, so #147's credited row
+      // survives untouched. merged_at rides in the same event already in hand, so the fix costs no
+      // extra calls; an UNMERGED PR has merged_at null, and NaN drops it here - a PR that never
+      // merged cannot have caused a close, whatever it mentioned.
+      const nearest = []
+      for (const e of events || []) {
+        const t = mergeMs(e)
+        const m = mentionMs(e)
+        if (
+          e.event !== 'cross-referenced' ||
+          !e.source?.issue?.pull_request ||
+          // BOTH windows, deliberately intersected rather than swapped. The mention-predates-close test
+          // is #147's and is NOT relaxed: a cross-reference that lands after the close is someone
+          // talking about a finished issue, and letting merged_at alone decide would admit it as
+          // evidence - a new false-credit surface, which is the direction #99/#110 exist to avoid
+          // (an accusation that disappears is worse than one that persists). merged_at is then ADDED,
+          // which strictly shrinks the set too: pitcairn #1226's PR #1219 mentions 03:46:15 (inside the
+          // old window) yet merges 04:08:34, AFTER the 04:03:14Z close, so the old rule could have
+          // ranked a never-causal merge first had its mention been the latest.
+          !Number.isFinite(m) ||
+          m > closedAtMs ||
+          !Number.isFinite(t) ||
+          t > closedAtMs
         )
-        .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0]
-      if (candidate) {
-        const pr = await github.pullRequest(candidate.source.issue.number)
-        const prState = tickState(pr.body || '')
-        evidence = {
-          pr: candidate.source.issue.number,
-          ticked: prState.ticked,
-          boxes: prState.boxes,
+          continue
+        const at = nearest.findIndex((c) => c.pr === e.source.issue.number)
+        if (at === -1) nearest.push({ pr: e.source.issue.number, mergedMs: t })
+        else if (t > nearest[at].mergedMs) nearest[at].mergedMs = t
+      }
+      nearest.sort((a, b) => b.mergedMs - a.mergedMs)
+      // Walk nearest-first but STOP at the first body that names this issue as its closing target -
+      // GitHub's own auto-close trigger, so it is the strongest claim of causation available without
+      // a new API surface, and it keeps both live controls at exactly one pullRequest() call. The
+      // walk is capped because a row's candidate list is unbounded (#110's rule): ten PRs mentioning
+      // one issue must not turn a three-row sweep into thirty calls.
+      const namedCloser = new RegExp(
+        `\\b(?:clos(?:e|es|ed|ing)|fix(?:e[sd]?|es|d)?|resolv(?:e|es|ed|ing))\\b[^\\n]{0,60}#\\s*${row.number}\\b`,
+        'i',
+      )
+      let picked = null
+      for (const c of nearest.slice(0, CLOSER_PROBE_MAX)) {
+        const pr = await github.pullRequest(c.pr)
+        const st = tickState(pr.body || '')
+        const probe = {
+          pr: c.pr,
           mergedAt: pr.mergedAt,
+          ticked: st.ticked,
+          boxes: st.boxes,
+          hasSection: st.hasSection,
+          named: namedCloser.test(pr.body || ''),
+        }
+        if (!picked) picked = probe
+        if (probe.named) {
+          picked = probe
+          break
         }
       }
+      if (picked)
+        evidence = {
+          pr: picked.pr,
+          ticked: picked.ticked,
+          boxes: picked.boxes,
+          hasSection: picked.hasSection,
+          named: picked.named,
+          mergedAt: picked.mergedAt,
+        }
     } catch {
       evidence = { none: true }
     }
@@ -374,9 +436,16 @@ const scanUnattestedClosures = async ({
   const list = shown
     .map((s) => {
       const ev = rowEvidence.get(s.number) || { none: true }
+      // #158 box 5: three states, three sentences. "found a closing PR and its body has no tick
+      // section" and "no PR merged before this close at all" both reported boxes === 0 and printed
+      // the SAME bare "0/N ticked" line, so a reader could not tell that evidence was looked for and
+      // absent from that it was looked for and could not be located. pitcairn #1242 is the live third
+      // state: all five of its candidates merged AFTER its 06:47:54Z close, so nothing resolved.
       return ev.pr && ev.boxes > 0
         ? `#${s.number} ${s.ticked}/${s.boxes} in the issue body, ${ev.ticked}/${ev.boxes} in PR #${ev.pr} - port the ticks or annotate why each box cannot be met`
-        : `#${s.number} ${s.ticked}/${s.boxes} ticked, closed ${s.closedAt}`
+        : ev.pr
+          ? `#${s.number} ${s.ticked}/${s.boxes} ticked, closed ${s.closedAt} (PR #${ev.pr} resolves as the closer at merge ${ev.mergedAt} but its body ${ev.hasSection ? 'has a Done-when section with nothing ticked' : 'carries no Done-when section at all'} - the ticks are not in any closing PR)`
+          : `#${s.number} ${s.ticked}/${s.boxes} ticked, closed ${s.closedAt} (no closing PR found: no PR mentioning this issue merged before the close, so a hand or coord-done verb closed it and the issue body is the only evidence)`
     })
     .join('; ')
   const anyPrEvidence = shown.some((s) => {
