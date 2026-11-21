@@ -414,3 +414,62 @@ describe('#123 pullRequest: the body-bearing read behind the evidence chain', ()
     )
   })
 })
+
+describe('#1319 viewIssue/listPrs: a malformed payload is an instrument failure, not an absence', () => {
+  it('viewIssue refuses non-JSON instead of reporting the issue as missing', async () => {
+    const client = GitHubClient({
+      repo: 'Sullux/pi-agents',
+      execFile: () => 'gh: warning: something went sideways\n{broken',
+    })
+    await assert.rejects(
+      () => client.viewIssue(1319),
+      /viewIssue\(#1319\) returned non-JSON [\s\S]*refusing to read a malformed issue as a missing one/,
+    )
+  })
+
+  it('viewIssue refuses EMPTY stdout - the silent-clean shape that reads as not-found', async () => {
+    const client = GitHubClient({
+      repo: 'Sullux/pi-agents',
+      execFile: () => '',
+    })
+    await assert.rejects(
+      () => client.viewIssue(42),
+      /refusing to read a malformed issue as a missing one/,
+    )
+  })
+
+  it('viewIssue still parses a healthy payload (the control arm)', async () => {
+    const client = GitHubClient({
+      repo: 'Sullux/pi-agents',
+      execFile: () =>
+        JSON.stringify({
+          number: 42,
+          title: 'real',
+          labels: [],
+          comments: [],
+          body: '',
+        }),
+    })
+    const issue = await client.viewIssue(42)
+    assert.equal(issue.number, 42)
+  })
+
+  it('listPrs refuses non-JSON instead of emptying the review queue', async () => {
+    const client = GitHubClient({
+      repo: 'Sullux/pi-agents',
+      execFile: () => 'not json at all',
+    })
+    await assert.rejects(
+      () => client.listPrs(),
+      /listPrs\(state=open\) returned non-JSON .*refusing to read a malformed PR list as an empty one/,
+    )
+  })
+
+  it('listPrs still returns [] for a LEGITIMATELY empty JSON list (the control arm)', async () => {
+    const client = GitHubClient({
+      repo: 'Sullux/pi-agents',
+      execFile: () => '[]',
+    })
+    assert.deepEqual(await client.listPrs(), [])
+  })
+})

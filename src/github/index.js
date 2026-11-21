@@ -516,7 +516,13 @@ const GitHubClient = ({
     try {
       return JSON.parse(raw)
     } catch {
-      return undefined
+      // #1319: the old `return undefined` made a malformed payload read as `Issue #N not found`
+      // at the claim gate (coord/index.js) - absence of evidence printed as evidence of absence.
+      // gh exits non-zero for a genuinely missing issue (runGh throws), so non-JSON at exit 0 is
+      // ALWAYS an instrument failure. Same doctrine as issueTimeline and listLabels above.
+      throw new Error(
+        `viewIssue(#${number}) returned non-JSON (${`${raw}`.slice(0, 80)}) - refusing to read a malformed issue as a missing one.`,
+      )
     }
   }
 
@@ -581,7 +587,12 @@ const GitHubClient = ({
     try {
       return JSON.parse(raw)
     } catch {
-      return []
+      // #1319: the old `return []` made a malformed payload read as "no open PRs" in preflight's
+      // review-queue branch - the review queue silently emptied by a read that never parsed.
+      // An unreadable list is UNKNOWN, not absent (listLabels' doctrine, applied here too).
+      throw new Error(
+        `listPrs(state=${state}) returned non-JSON (${`${raw}`.slice(0, 80)}) - refusing to read a malformed PR list as an empty one.`,
+      )
     }
   }
 
