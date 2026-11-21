@@ -5,7 +5,9 @@ const {
   hasClaimBy,
   completedByOther,
   unresolvedProtocolLines,
+  malformedStamps,
 } = require('./owner')
+const { stampOfMarker } = require('./stamp')
 const {
   isIssueNumber,
   pullRequestRefusal,
@@ -330,9 +332,8 @@ const CoordService = ({
           .join('\n')
       : ''
 
-    const timestamp = now()
     const commentBody =
-      `**CLAIM** | agent: agent-${cleanCurrent} | human: @${human} | at: ${timestamp}\n\n` +
+      `**CLAIM** | agent: agent-${cleanCurrent} | human: @${human} | at: ${stampOfMarker(now)}\n\n` +
       `plan: ${plan || '_(none given)_'}\neta: ${eta || '_(none given)_'}` +
       warningNote
 
@@ -410,7 +411,7 @@ const CoordService = ({
     if (!isIssueNumber(number)) return invalidNumber(number)
     const notAnIssue = await refuseIfNotOpen('status', number)
     if (notAnIssue) return notAnIssue
-    const commentBody = `**STATUS** | agent: agent-${cleanCurrent} | at: ${now()}\n\n${message}`
+    const commentBody = `**STATUS** | agent: agent-${cleanCurrent} | at: ${stampOfMarker(now)}\n\n${message}`
     await github.commentIssue(number, commentBody)
     return { ok: true, number }
   }
@@ -481,7 +482,7 @@ const CoordService = ({
     const notAnIssue = await refuseIfNotOpen('review', number)
     if (notAnIssue) return notAnIssue
     const commentBody =
-      `**REVIEW** | agent: agent-${cleanCurrent} | at: ${now()}` +
+      `**REVIEW** | agent: agent-${cleanCurrent} | at: ${stampOfMarker(now)}` +
       (pr ? ` | pr: #${pr}` : '') +
       (text ? `\n\n${text}` : '')
     await github.commentIssue(number, commentBody)
@@ -596,7 +597,7 @@ const CoordService = ({
         ? ` | forced over unretracted DONE by agent-${fence.agent}${stampOf(fence)}`
         : ''
     const commentBody =
-      `**DONE** | agent: agent-${cleanCurrent} | at: ${now()}` +
+      `**DONE** | agent: agent-${cleanCurrent} | at: ${stampOfMarker(now)}` +
       tickNote +
       fenceNote +
       (pr ? ` | pr: #${pr}` : '') +
@@ -777,7 +778,7 @@ const CoordService = ({
     // agent were indistinguishable, and the #3 contentless post was indistinguishable from
     // a terse one. Marker is the FIRST line so a reader can classify without reading bodies.
     const commentBody =
-      `**SYNC** | agent: agent-${cleanCurrent} | human: @${human} | at: ${now()}` +
+      `**SYNC** | agent: agent-${cleanCurrent} | human: @${human} | at: ${stampOfMarker(now)}` +
       `\n\n${cleanedText}`
     // The stamp check refuses BEFORE the call, like the two guards above it: a hub line
     // is a fleet timeline, and a post that reports success while carrying no readable
@@ -811,6 +812,11 @@ const CoordService = ({
     // the very next `page coord sync` printed `== hub #4 ==`. One resolver now feeds both paths, over
     // the rows this call already read.
     const target = await readHubTarget({ issues })
+    // #167: name every refused `at:` token on the board, per issue, so a malformed stamp is a
+    // loud diagnostic instead of a silent epoch-20 that wins an arbitration.
+    const stampWarnings = issues.flatMap((i) =>
+      malformedStamps(i.comments || []).map((w) => ({ issue: i.number, ...w })),
+    )
     return formatSync({
       issues,
       currentAgent: cleanCurrent,
@@ -818,6 +824,7 @@ const CoordService = ({
       hub: target.number ? { number: target.number, via: target.via } : null,
       hubReason: target.error || '',
       now: now(),
+      stampWarnings,
     })
   }
 

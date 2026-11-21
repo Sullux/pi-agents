@@ -14,6 +14,7 @@ const {
   USAGE,
 } = require('../coord/issueNumber')
 const { Provenance } = require('./selfcheck')
+const { RuntimeIdentity } = require('../runtime-identity')
 const { RunnerCurrency } = require('./runner-currency')
 
 // #154: the mutating verbs' help lines used to hand-copy the USAGE signatures, and one
@@ -112,6 +113,9 @@ const Cli = ({
   // #130: same injected shape as the two above - it walks /proc and spawns git, so a test hands it a fake
   // and can prove the verb travels the seam rather than re-implementing the census at the call site.
   runnerCurrency = RunnerCurrency(),
+  // #167 box 5: same injected shape - resolves the invoked binary and spawns git, so a test
+  // hands it a fake and pins the rendered identity rather than re-deriving it at the call site.
+  runtimeIdentity = RuntimeIdentity(),
   stdout = console.log,
   stderr = console.error,
 } = {}) => {
@@ -306,15 +310,18 @@ const Cli = ({
         return 0
       }
 
-      const header = `${pad('AGENT', 12)} ${pad('PROJECT', 12)} ${pad('PID', 8)} ${pad('STATUS', 16)} ${pad('UPTIME', 10)}`
+      const header = `${pad('AGENT', 12)} ${pad('PROJECT', 12)} ${pad('PID', 8)} ${pad('STATUS', 16)} ${pad('UPTIME', 10)} ${pad('RUNTIME', 12)}`
       const lines = [header]
 
       for (const s of sessions) {
         const uptime = formatUptime(Date.now() - s.startedAt)
         lines.push(
-          `${pad(s.agent, 12)} ${pad(s.project, 12)} ${pad(String(s.pid), 8)} ${pad(s.status, 16)} ${pad(uptime, 10)}`,
+          `${pad(s.agent, 12)} ${pad(s.project, 12)} ${pad(String(s.pid), 8)} ${pad(s.status, 16)} ${pad(uptime, 10)} ${pad(s.runtime?.commit || '-', 12)}`,
         )
       }
+      // #167 box 5: name the runtime THIS read resolved from, so the board sees what is running.
+      const identity = runtimeIdentity()
+      lines.push(`\nruntime: ${identity.path} @ ${identity.commit}`)
       stdout(lines.join('\n'))
       return 0
     }
