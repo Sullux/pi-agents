@@ -314,7 +314,9 @@ const xrefEvent = (
     // picker now ranks on it, so the fixture has to carry it. A helper that left it out would make
     // every candidate unrankable and the `none` arms below would pass for the wrong reason - a
     // vacuous green wearing a real assertion, which is how a fixture hides a pin (#833's class).
-    source: { issue: { number: prNumber, pull_request: { merged_at: mergedAt } } },
+    source: {
+      issue: { number: prNumber, pull_request: { merged_at: mergedAt } },
+    },
   })
 
 // a body that names the issue as its closing target: GitHub's own auto-close trigger, and the
@@ -566,16 +568,32 @@ it('#158 ranks by merge adjacency, so the closer wins over the latest mention (p
     ],
     pullRequest: (n) =>
       n === closer
-        ? { number: n, mergedAt: '2026-11-10T01:59:59Z', body: closerBody(777, 4) }
-        : { number: n, mergedAt: '2026-11-10T01:30:00Z', body: sectionlessBody },
+        ? {
+            number: n,
+            mergedAt: '2026-11-10T01:59:59Z',
+            body: closerBody(777, 4),
+          }
+        : {
+            number: n,
+            mergedAt: '2026-11-10T01:30:00Z',
+            body: sectionlessBody,
+          },
   })
   assert.equal(
     result.unattested[0].evidence.pr,
     closer,
     'a later MENTION must not outrank a nearer MERGE - the old rule returned the innocent PR',
   )
-  assert.equal(state.prCalls.length, 1, `the named-closer short-circuit never traveled: ${state.prCalls}`)
-  assert.deepEqual(state.prCalls, [closer], 'the nearest-merge candidate must be probed first')
+  assert.equal(
+    state.prCalls.length,
+    1,
+    `the named-closer short-circuit never traveled: ${state.prCalls}`,
+  )
+  assert.deepEqual(
+    state.prCalls,
+    [closer],
+    'the nearest-merge candidate must be probed first',
+  )
   assert.ok(
     result.note.includes(
       '#777 0/4 in the issue body, 4/4 in PR #1250 - port the ticks or annotate why each box cannot be met',
@@ -584,7 +602,7 @@ it('#158 ranks by merge adjacency, so the closer wins over the latest mention (p
   )
 })
 
-it('#158 control: where both rules agree, #147\'s credited row is byte-identical (pitcairn #1226)', async () => {
+it("#158 control: where both rules agree, #147's credited row is byte-identical (pitcairn #1226)", async () => {
   const { result, state } = await scanWithEvidence([closedRow(777, 0, 5)], {
     timeline: [xrefEvent(1227, '2026-11-10T01:55:00Z', '2026-11-10T01:59:30Z')],
     pullRequest: () => ({
@@ -594,7 +612,11 @@ it('#158 control: where both rules agree, #147\'s credited row is byte-identical
     }),
   })
   assert.equal(result.unattested[0].evidence.pr, 1227)
-  assert.equal(state.prCalls.length, 1, 'the control must not fan out into extra calls')
+  assert.equal(
+    state.prCalls.length,
+    1,
+    'the control must not fan out into extra calls',
+  )
   assert.ok(
     result.note.includes(
       '#777 0/5 in the issue body, 5/5 in PR #1227 - port the ticks or annotate why each box cannot be met',
@@ -603,7 +625,7 @@ it('#158 control: where both rules agree, #147\'s credited row is byte-identical
   )
 })
 
-it('#158 a merge AFTER the close is not a closer even when its mention predates it (#1226\'s PR #1219 shape)', async () => {
+it("#158 a merge AFTER the close is not a closer even when its mention predates it (#1226's PR #1219 shape)", async () => {
   const { result, state } = await scanWithEvidence([closedRow(777, 0, 2)], {
     // mention 01:59 is INSIDE the old window, merge 02:00:05 is after the 02:00:00 close
     timeline: [xrefEvent(1219, '2026-11-10T01:59:00Z', '2026-11-10T02:00:05Z')],
@@ -613,7 +635,11 @@ it('#158 a merge AFTER the close is not a closer even when its mention predates 
     true,
     'a PR that merged after the close cannot have caused it, whatever it mentioned',
   )
-  assert.deepEqual(state.prCalls, [], 'the excluded candidate must never reach a pullRequest call')
+  assert.deepEqual(
+    state.prCalls,
+    [],
+    'the excluded candidate must never reach a pullRequest call',
+  )
 })
 
 it('#158 an unmerged PR (merged_at null) is never a closer', async () => {
@@ -632,7 +658,9 @@ it('#158 three states, three sentences: a sectionless closer is not "no closer f
       body: sectionlessBody,
     }),
   })
-  const missing = await scanWithEvidence([closedRow(777, 0, 2)], { timeline: [] })
+  const missing = await scanWithEvidence([closedRow(777, 0, 2)], {
+    timeline: [],
+  })
   assert.ok(
     resolved.result.note.includes('resolves as the closer at merge'),
     `the resolved-but-sectionless sentence is absent: ${resolved.result.note}`,
@@ -671,7 +699,9 @@ it('#158 a closer whose section has no boxes reads differently from having no se
     }),
   })
   assert.ok(
-    emptySection.result.note.includes('has a Done-when section with nothing ticked'),
+    emptySection.result.note.includes(
+      'has a Done-when section with nothing ticked',
+    ),
     emptySection.result.note,
   )
   assert.ok(
@@ -680,7 +710,11 @@ it('#158 a closer whose section has no boxes reads differently from having no se
   )
   const boxesPresent = await scanWithEvidence([closedRow(777, 0, 2)], {
     timeline: [xrefEvent(802, '2026-11-10T01:59:00Z', '2026-11-10T01:59:30Z')],
-    pullRequest: () => ({ number: 802, mergedAt: '2026-11-10T01:59:30Z', body: body(0, 3) }),
+    pullRequest: () => ({
+      number: 802,
+      mergedAt: '2026-11-10T01:59:30Z',
+      body: body(0, 3),
+    }),
   })
   assert.ok(
     boxesPresent.result.note.includes('0/3 in PR #802'),
@@ -696,24 +730,44 @@ it('#158 the walk continues past a nearer merge that does not name the issue', a
     ],
     pullRequest: (n) =>
       n === 901
-        ? { number: n, mergedAt: '2026-11-10T01:40:30Z', body: closerBody(777, 2) }
-        : { number: n, mergedAt: '2026-11-10T01:59:40Z', body: sectionlessBody },
+        ? {
+            number: n,
+            mergedAt: '2026-11-10T01:40:30Z',
+            body: closerBody(777, 2),
+          }
+        : {
+            number: n,
+            mergedAt: '2026-11-10T01:59:40Z',
+            body: sectionlessBody,
+          },
   })
   assert.equal(
     result.unattested[0].evidence.pr,
     901,
     'a body that names the issue as its closing target outranks a nearer merge that does not',
   )
-  assert.deepEqual(state.prCalls, [900, 901], `the walk order is wrong: ${state.prCalls}`)
+  assert.deepEqual(
+    state.prCalls,
+    [900, 901],
+    `the walk order is wrong: ${state.prCalls}`,
+  )
 })
 
 it('#158 the probe is capped, so one row cannot fan out into the whole mention history', async () => {
   const many = Array.from({ length: 6 }, (_, i) =>
-    xrefEvent(700 + i, '2026-11-10T01:00:00Z', `2026-11-10T01:${String(30 + i).padStart(2, '0')}:00Z`),
+    xrefEvent(
+      700 + i,
+      '2026-11-10T01:00:00Z',
+      `2026-11-10T01:${String(30 + i).padStart(2, '0')}:00Z`,
+    ),
   )
   const { result, state } = await scanWithEvidence([closedRow(777, 0, 2)], {
     timeline: many,
-    pullRequest: (n) => ({ number: n, mergedAt: '2026-11-10T01:59:00Z', body: sectionlessBody }),
+    pullRequest: (n) => ({
+      number: n,
+      mergedAt: '2026-11-10T01:59:00Z',
+      body: sectionlessBody,
+    }),
   })
   assert.equal(
     state.prCalls.length,

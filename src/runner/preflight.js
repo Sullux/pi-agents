@@ -342,7 +342,8 @@ const scanUnattestedClosures = async ({
     try {
       const closedAtMs = Date.parse(row.closedAt)
       const events = await github.issueTimeline(row.number)
-      const mergeMs = (e) => Date.parse(e.source?.issue?.pull_request?.merged_at ?? '')
+      const mergeMs = (e) =>
+        Date.parse(e.source?.issue?.pull_request?.merged_at ?? '')
       const mentionMs = (e) => Date.parse(e.created_at ?? '')
       // #158: rank the candidates by MERGE adjacency, not by mention recency. A cross-referenced
       // event's created_at is when the mention landed, which is not when the PR merged, so sorting
