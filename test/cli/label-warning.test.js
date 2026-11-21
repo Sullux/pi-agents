@@ -73,7 +73,7 @@ const REVIEW_HONEST_LINE_PREFIX =
 describe('page coord reports a failed label edit as a warning, not a failure (#34)', () => {
   const cases = [
     ['claim', 'Claimed #34', []],
-    ['release', 'Released #34', []],
+    ['release', 'Released #34', ['standing down for a stated reason']],
     // #44: the label write failed, so `Moved #34 to in-review` was attesting a transition that did
     // not happen. This is the one verb whose success line changes on the failure path, and the
     // byte-identity of the SUCCESS path is pinned separately below rather than weakened here.
@@ -156,7 +156,7 @@ describe('page coord reports a failed label edit as a warning, not a failure (#3
   it('claim and release still attest the comment first - the asymmetry is the point (#44)', async () => {
     for (const [sub, prefix, extra] of [
       ['claim', 'Claimed #34', []],
-      ['release', 'Released #34', []],
+      ['release', 'Released #34', ['standing down for a stated reason']],
     ]) {
       const h = harness({ sub, extra })
       assert.equal(await h.run(), 0, h.out.join(' | '))

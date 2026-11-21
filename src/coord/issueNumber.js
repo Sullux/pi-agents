@@ -10,8 +10,12 @@
 // `gh issue comment NaN --body **STATUS** ... | at: <epoch>`, which reads like a
 // quoting accident in the caller's own command rather than a missing positional.
 const USAGE = {
-  claim: 'claim <issue>',
-  release: 'release <issue> [--reason "<why>"]',
+  // #154: `claim`'s line used to be the bare form while the help block advertised
+  // [--plan <p>]; with the help now RENDERED from this map, the map has to carry
+  // the whole signature or the hint vanishes. Same commit gave `release` its
+  // positional twin, which is the call shape `status`/`review` already accept.
+  claim: 'claim <issue> [--plan <p>]',
+  release: 'release <issue> [--reason "<why>" | "<why>"]',
   status: 'status <issue> "<message>"',
   review: 'review <issue> --pr <n> "<verdict>"',
   done: 'done <issue> [--pr <n>] [message] [--force]',

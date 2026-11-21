@@ -8,9 +8,37 @@ const { CoordService } = require('../coord')
 const { Runner, SessionTracker } = require('../runner')
 const { CodeCurrency } = require('../runner/code-currency')
 const { pad } = require('../coord/formatters')
-const { requireIssueNumber, requireMessage } = require('../coord/issueNumber')
+const {
+  requireIssueNumber,
+  requireMessage,
+  USAGE,
+} = require('../coord/issueNumber')
 const { Provenance } = require('./selfcheck')
 const { RunnerCurrency } = require('./runner-currency')
+
+// #154: the mutating verbs' help lines used to hand-copy the USAGE signatures, and one
+// had already drifted (`release` printed `[--reason]` with no placeholder while errors
+// printed the right form from the other file; #32 fixed `done`'s copy the same way once).
+// Rendering from USAGE makes one fact have one home, so a pin on this function's output
+// covers all five verbs at once - the class #36 could not see with its presence-only check.
+const COORD_VERB_HELP = {
+  claim: 'Claim an issue',
+  release: 'Release an issue claim',
+  status: 'Post heartbeat progress update',
+  review:
+    'Verdict, expected from a NON-owner: no ownership check here is intentional (#28)',
+  done: 'Mark issue completed; refuses unless you hold the claim, --force logs the override (#28)',
+}
+
+const coordVerbHelpLines = () =>
+  Object.entries(COORD_VERB_HELP)
+    .map(([verb, description]) => {
+      const line = `  coord ${USAGE[verb]}`
+      return line.length >= 37
+        ? `${line}   ${description}`
+        : line.padEnd(37) + description
+    })
+    .join('\n')
 
 // #19: the usage path used to write to the GLOBAL console, so `Cli({ stdout })` could not see its
 // own help text and every `--help` render was unassertable in-process. The sink is a parameter with
@@ -48,11 +76,7 @@ Agent Commands:
 Coordination Commands:
   coord board [--repo <r>]           Display coordination board
   coord sync                         Synchronize status, claims, and hub
-  coord claim <issue> [--plan <p>]   Claim an issue
-  coord release <issue> [--reason]   Release an issue claim
-  coord status <issue> <text>        Post heartbeat progress update
-  coord review <issue> --pr <n> "<verdict>"   Verdict, expected from a NON-owner: no ownership check here is intentional (#28)
-  coord done <issue> [--pr <n>] [message] [--force]   Mark issue completed; refuses unless you hold the claim, --force logs the override (#28)
+${coordVerbHelpLines()}
   coord hub <text>                   Post update to coordination hub
   coord hub --body-file <path>       Post update from a markdown file
   coord provenance                   Report which checkout and commit are running
@@ -609,8 +633,18 @@ const Cli = ({
       }
       if (sub === 'release') {
         const num = requireIssueNumber('release', positionals[1])
-        if (failed(num)) return 1
-        const res = await coord.release(num.value, { reason: flags.reason })
+        // #154: `release` was the one mutating verb that ignored a positional, so the call
+        // shape `status`/`review` train you to use printed `reason: unspecified` and exited 0.
+        // Both forms now work; when both are present the FLAG wins and the positional is not
+        // concatenated (pinned in test/coord/release-reason.test.js). No message anywhere is
+        // now a refusal, which is what makes the library's 'unspecified' fallback
+        // library-only instead of the fleet's default sentence.
+        const msg = requireMessage(
+          'release',
+          flags.reason ?? positionals.slice(2).join(' '),
+        )
+        if (failed(num, msg)) return 1
+        const res = await coord.release(num.value, { reason: msg.value })
         // The four verbs below used to print success without reading `res`, so a
         // service-level refusal (including the #13 guard) stayed invisible. The
         // success line is what made a failed write look like a completed one.
