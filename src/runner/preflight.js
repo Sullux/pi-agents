@@ -1,5 +1,6 @@
 const { isMine, cleanAgent } = require('../coord/owner')
 const { tickState, closureShape } = require('../coord/tick-state')
+const { scanClosedWindow } = require('./closed-window-scan')
 
 const NON_ACTIONABLE_LABELS = [
   'hub',
@@ -189,6 +190,11 @@ const UNATTESTED_WINDOW_HOURS = 6
 // untouched and the at-cap refusal is kept: a truncated read is still UNKNOWN, and UNKNOWN is still honest.
 const CLOSE_SCAN_LIMIT = null
 const MAX_CLOSURE_LINES = 3
+// pi#151: an empty window read is legitimate on a quiet day and illegitimate on a blind reader, and the
+// two arrive as the same []. The probe is the tie-breaker: a wide bounded sweep whose ONLY purpose is to
+// prove the read can see the population at all. 90d measured 573 rows across 3 slice calls at pitcairn
+// `71e314b` (the #148 header), so it stays under the bisect's own ceiling without incident.
+const POPULATION_PROBE_HOURS = 24 * 90
 
 // The UTC-day floor of the window, as a gh search qualifier. Day granularity is deliberate: it is a
 // superset, so no in-window close can be lost to rounding, and the client-side exact filter still runs.
@@ -230,6 +236,56 @@ const scanUnattestedClosures = async ({
     }
   }
   const rows = closed || []
+  let witness = ''
+  if (rows.length === 0) {
+    const probe = await scanClosedWindow({
+      github,
+      now,
+      windowHours: POPULATION_PROBE_HOURS,
+    })
+    const newest = probe.rows.reduce(
+      (a, r) => Math.max(a, Date.parse(r.closedAt) || 0),
+      0,
+    )
+    const iso = (t) => new Date(t).toISOString()
+    if (!probe.readable || probe.truncatedAtCap) {
+      return {
+        readable: false,
+        scanned: 0,
+        inWindow: 0,
+        windowHours,
+        unattested: [],
+        note:
+          `unattested-closure scan of the CLOSED axis: UNKNOWN, not clean (pi#151) - the window read ` +
+          `returned 0 rows AND the ${POPULATION_PROBE_HOURS / 24}d population probe could not read the ` +
+          `population either${probe.truncatedAtCap ? ' (a slice stayed at the page ceiling)' : ''}: ` +
+          `${String(probe.note || 'no note from the probe').split('\n')[0]}`,
+      }
+    }
+    if (probe.rows.length === 0) {
+      // #151 corrected: a COMPLETED empty probe is a quiet repo, not a blind read, and stays on the
+      // clean summary path - the witness clause is what separates the two zeros from a degraded read.
+      witness =
+        ` (pi#151 witness: the CLOSED read completed empty and the ` +
+        `${POPULATION_PROBE_HOURS / 24}d population probe completed with 0 rows - ` +
+        `a genuinely quiet repo, not an unreadable one)`
+    } else {
+      return {
+        readable: true,
+        scanned: 0,
+        inWindow: 0,
+        windowHours,
+        unattested: [],
+        population: probe.rows.length,
+        newestClosedAt: iso(newest),
+        note:
+          `unattested-closure scan: quiet window, not a blind read (pi#151) - 0 closed within the last ` +
+          `${windowHours}h, and the sweep proves it can see: a ${POPULATION_PROBE_HOURS / 24}d population ` +
+          `probe returned ${probe.rows.length} closed issues, newest closed ${iso(newest)}. ` +
+          `Both numbers printed so 0-scanned never again reads as an untested repo.`,
+      }
+    }
+  }
   const cutoff = now() - windowHours * 60 * 60 * 1000
   const inWindow = rows.filter((i) => {
     const t = Date.parse(i.closedAt)
@@ -312,6 +368,7 @@ const scanUnattestedClosures = async ({
   }))
   const summary =
     `${rows.length} closed issue(s) scanned, ` +
+    witness +
     `${inWindow.length} closed within the last ${windowHours}h, ${unattested.length} unattested, ` +
     `${unattestable.length} with no tick mechanism (not gaps: #99 ratified them)`
   const list = shown
