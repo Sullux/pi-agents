@@ -90,7 +90,7 @@ const warningLines = (out) =>
 describe('#79: the CLI reports a skipped write as a fact, not an error', () => {
   for (const [sub, successPrefix, extra] of [
     ['claim', 'Claimed #34', []],
-    ['release', 'Released #34', []],
+    ['release', 'Released #34', ['standing down for a stated reason']],
     ['done', 'Marked #34 done', ['attestation text']],
   ]) {
     it(`${sub}: prints the notice, no warning, and issues zero label calls`, async () => {

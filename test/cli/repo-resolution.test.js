@@ -44,7 +44,7 @@ const harness = (repo) => {
 describe('every mutating verb names the resolved repo (#23)', () => {
   const cases = [
     [['coord', 'claim', '21'], 'Claimed #21 @Sullux/pi-agents'],
-    [['coord', 'release', '21'], 'Released #21 @Sullux/pi-agents'],
+    [['coord', 'release', '21', 'reasons given aloud'], 'Released #21 @Sullux/pi-agents'],
     [
       ['coord', 'status', '21', 'still going'],
       'Status updated on #21 @Sullux/pi-agents',
