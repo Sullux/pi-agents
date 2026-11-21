@@ -179,9 +179,7 @@ it('the sweep really reaches gh with the predicate: an argv pin through the exec
       // pi#151: the population probe fires on the now-empty window read; short-circuit it with a
       // readable population so this arm keeps asserting the WINDOW call's argv, not a probe slice.
       if (options.search && options.search.includes(' closed:<=')) {
-        return [
-          { number: 1, closedAt: '2026-11-07T00:00:00.000Z' },
-        ]
+        return [{ number: 1, closedAt: '2026-11-07T00:00:00.000Z' }]
       }
       await c.listIssues(options)
       return []
@@ -453,13 +451,13 @@ it('#151 a zero window inside a readable population reports QUIET with both numb
     probeRows([{ number: 99, closedAt: '2026-11-07T10:00:00.000Z' }]),
   )
   assert.equal(result.readable, true)
-  assert.ok(
-    result.note.includes('quiet window, not a blind read'),
-    result.note,
-  )
+  assert.ok(result.note.includes('quiet window, not a blind read'), result.note)
   assert.ok(result.note.includes('1 closed issues'), result.note)
   assert.ok(result.note.includes('2026-11-07'), result.note)
-  assert.ok(calls.length >= 2, `probe seam never traveled: ${calls.length} calls`)
+  assert.ok(
+    calls.length >= 2,
+    `probe seam never traveled: ${calls.length} calls`,
+  )
 })
 
 it('#151 a zero window with a zero population is UNKNOWN - two zeros cannot certify each other', async () => {
@@ -472,7 +470,9 @@ it('#151 a zero window with a zero population is UNKNOWN - two zeros cannot cert
 it('#151 a probe stuck at the page ceiling is UNKNOWN, never a clean quiet claim', async () => {
   const atCap = async (o) => {
     if (o.search && o.search.includes(' closed:<=')) {
-      throw new Error('gh issue list returned exactly 500 issues on the closed axis')
+      throw new Error(
+        'gh issue list returned exactly 500 issues on the closed axis',
+      )
     }
     return []
   }
@@ -500,9 +500,11 @@ it('#151 plausibility: a closed_at beyond now is filtered out of the probe windo
 })
 
 it('#151 non-vacuity pair: a non-empty window read never fires the probe at all', async () => {
-  const { result, calls } = await scanDriven([
-    closedRow(120, 2, 0),
-  ])
-  assert.equal(calls.length, 1, `probe fired on a populated window: ${calls.length} calls`)
+  const { result, calls } = await scanDriven([closedRow(120, 2, 0)])
+  assert.equal(
+    calls.length,
+    1,
+    `probe fired on a populated window: ${calls.length} calls`,
+  )
   assert.ok(result.note.includes('closed issue(s) scanned'), result.note)
 })

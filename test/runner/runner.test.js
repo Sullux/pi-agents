@@ -24,7 +24,10 @@ describe('Runner: Loop Execution and Continuation Prompts', () => {
         // This world wants the CLEAN branch, so feed the two-bound probe slice one recent close.
         if (options.search && options.search.includes(' closed:<=')) {
           return [
-            { number: 9, closedAt: new Date(Date.now() - 86400000).toISOString() },
+            {
+              number: 9,
+              closedAt: new Date(Date.now() - 86400000).toISOString(),
+            },
           ]
         }
         return []
@@ -156,7 +159,10 @@ describe('Runner: Loop Execution and Continuation Prompts', () => {
         // This world wants the CLEAN branch, so feed the two-bound probe slice one recent close.
         if (options.search && options.search.includes(' closed:<=')) {
           return [
-            { number: 9, closedAt: new Date(Date.now() - 86400000).toISOString() },
+            {
+              number: 9,
+              closedAt: new Date(Date.now() - 86400000).toISOString(),
+            },
           ]
         }
         return []
