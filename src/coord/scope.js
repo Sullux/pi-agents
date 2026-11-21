@@ -80,6 +80,66 @@ const normalizeEntry = (line) =>
     .map((part) => part.replace(BULLET, '').replace(/`/g, '').trim())
     .filter((part) => part && !NOT_A_PATH(part))
 
+// #165: equality was the whole comparison, so a broad declaration fenced nothing. `src/server` and
+// `src/server/db/index.js` are different strings, and `Array.prototype.includes` answered "no overlap" for
+// every pair of that shape: 14 such pairs among pitcairn's open issues at `cccbf20`, 0 detected. That is how
+// I claimed #1307 into a `MEMORIES.md` two open PRs were already editing and the gate had nothing to say.
+// The rule is now path-SEGMENT ancestry in either direction, so a directory token covers what sits under it
+// and a file token is covered by one.
+// The boundary is the other half of the defect, and the only thing that makes this safe to widen: an ancestor
+// compares as `key + '/'`, never the bare prefix, so `src/server` does NOT reach `src/serverless` or
+// `src/server-foo`.
+// Globs answer #165's Notes question deliberately rather than by inheritance: a trailing `/**` or `/*` means
+// the same region as the bare directory, so `src/server/**` and `src/server` collide with each other and with
+// anything under them - authors write both for one intent, and a gate that distinguishes them is only
+// nominally precise. A `*` anywhere ELSE is not interpreted: `src/**/foo.js` compares by equality, because
+// guessing at intermediate globs is how a scope gate starts refusing work it cannot explain.
+// Prose survives the widening because it was never a path token: whitespace, or a character outside a path
+// alphabet, makes a token comparable only to itself. That is the half of #820's guarantee that stays true, and
+// SKILL.md's sentence is rewritten with this change because its FIRST half was not.
+// Empty segments are ALLOWED here on purpose. `+` after the slash was the first draft, and it quietly
+// defeated the normalizer below: `src/server/` and `src//server` failed this test, fell back to string
+// equality, and so the trailing-slash and `..` collapsing was unreachable code for exactly the tokens it
+// exists for. A gate in front of a normalizer must not reject what the normalizer is meant to fix.
+const PATH_TOKEN = /^[A-Za-z0-9_.@-]+(\/[A-Za-z0-9_.@*-]*)*$/
+const TRAILING_GLOB = /(\/\*\*|\/\*)$/
+
+// `.`/`..`/empty segments and trailing slashes are collapsed here, so `src//server/` and `src/./server`
+// compare as the region they name. `normalizeEntry` owns the DECORATION (bullets, backticks, `;`,
+// annotations); this owns the PATH, and neither duplicates the other.
+const segmentKey = (token) => {
+  const parts = []
+  for (const segment of `${token}`.split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') parts.pop()
+    else parts.push(segment)
+  }
+  if (parts.at(-1) === '**' || parts.at(-1) === '*') parts.pop()
+  return parts.join('/')
+}
+
+const comparable = (token) => PATH_TOKEN.test(token)
+// a glob that is not a whole region: `src/**/foo.js`, `**/*.js`, `src/a*.js`
+const hasInteriorGlob = (token) =>
+  token.includes('*') && !TRAILING_GLOB.test(token)
+
+// Returns 'equality' (same region named the same way), 'containment' (one is a path-segment ancestor of
+// the other, either direction), or null. The two kinds are separated because a claimant needs to know that
+// `src/server` and `src/server/db/index.js` are not a typo in someone's Files section.
+const overlapKind = (a, b) => {
+  if (!comparable(a) || !comparable(b)) return a === b ? 'equality' : null
+  const [ka, kb] = [segmentKey(a), segmentKey(b)]
+  if (hasInteriorGlob(a) || hasInteriorGlob(b))
+    return ka === kb ? 'equality' : null
+  if (!ka || !kb) return null
+  if (ka === kb) return 'equality'
+  return kb.startsWith(`${ka}/`) || ka.startsWith(`${kb}/`)
+    ? 'containment'
+    : null
+}
+
+const pathOverlaps = (a, b) => overlapKind(a, b) !== null
+
 // #863: the issue numbers a `split:` line waives. Line-anchored and fence-skipping, so a
 // documented EXAMPLE of the syntax does not silently grant a real waiver.
 const parseSplits = (body = '') => {
@@ -273,8 +333,26 @@ const checkScopeCollision = (
     const unheld = !owner
 
     const issueFiles = parseScope(issue.body)
-    const collidingFiles = targetFiles.filter((f) => issueFiles.includes(f))
-    if (!collidingFiles.length) continue
+    // #165: every match becomes the pair the next agent has to act on, not just one side of it. A refusal that
+    // names two unequal strings invites "these paths are different", which is the ten minutes I spent at the
+    // keyboard before I read the comparator - so containment says which token reaches where.
+    const pairs = targetFiles
+      .flatMap((file) =>
+        issueFiles.map((declared) => ({
+          file,
+          declared,
+          kind: overlapKind(file, declared),
+        })),
+      )
+      .filter((pair) => pair.kind)
+    if (!pairs.length) continue
+    const collidingFiles = [
+      ...new Set(
+        pairs.map(({ file, declared, kind }) =>
+          kind === 'equality' ? file : `${declared} contains ${file}`,
+        ),
+      ),
+    ]
 
     // A recorded split waives the pair in EITHER direction, which is the remedy the bash
     // variant documents and the only protocol exit this gate has.
@@ -289,6 +367,9 @@ const checkScopeCollision = (
       // disagree with what the board prints beside the same issue number.
       status: statusCell(issue),
       files: collidingFiles,
+      // #165: the board marks broad declarations, and a caller that wants to explain WHY it was fenced can
+      // ask this instead of re-deriving it from the strings.
+      containment: pairs.some((pair) => pair.kind === 'containment'),
       unheld,
       advice: warningAdvice({ unheld, status: statusCell(issue) }),
       soft: unheld || SOFT_STATUSES.includes(statusCell(issue)),
@@ -308,16 +389,21 @@ const checkScopeCollision = (
       // split needs the whole set, because the first file alone can look incidental.
       collidingFile: hard.files[0],
       collidingFiles: hard.files,
+      // #165: the overlap record already knew which kind of match fired, but a caller reading the RESULT
+      // could not ask, because this object is rebuilt field by field. Same seam-loss #77 documented for the
+      // advice text: a classification computed upstream and dropped where the renderer can't reach it.
+      containment: hard.containment,
       warnings,
     }
   }
 
-  return { hasCollision: false, warnings }
+  return { hasCollision: false, containment: false, warnings }
 }
 
 module.exports = {
   parseScope,
   parseSplits,
+  pathOverlaps,
   filesSectionDiagnosis,
   labelNames,
   labelKey,
