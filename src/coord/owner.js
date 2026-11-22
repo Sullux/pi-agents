@@ -1,3 +1,5 @@
+const { MARKER_STAMP_RE, parseStamp } = require('./stamp')
+
 const cleanAgent = (name = '') =>
   name
     .trim()
@@ -201,8 +203,17 @@ const completedByOther = (comments = [], agent = '') => {
     const kind = markerOf(body)
     const who = agentOf(body)
     const stamped = () => {
-      const m = body.match(/\|\s*at:\s*(\d+)/)
-      if (m) return Number(m[1])
+      // #167: read the WHOLE token, never a digit prefix. The old /\|\s*at:\s*(\d+)/ turned a
+      // hand-authored `at: 20:16Z` into epoch 20 and an ISO `at: 2026-...` into 2026, so a
+      // malformed stamp silently decided Rule C comparisons. parseStamp refuses what it cannot
+      // order (date-less HH:MMZ, garbage); a refused token falls through to the transport
+      // timestamp below - the documented safe direction - and is surfaced LOUDLY by
+      // malformedStamps rather than participating in any comparison as a fake number.
+      const m = body.match(MARKER_STAMP_RE)
+      if (m) {
+        const parsed = parseStamp(m[1])
+        if (parsed.ok) return parsed.ms
+      }
       // GraphQL (`gh issue view --json comments`) delivers `createdAt` as an ISO string; REST and
       // the fixtures deliver `created_at`, sometimes already a number. Reading only `created_at`
       // made the fallback dead in production (bravo's ask on PR #100), and returning the raw string
@@ -258,6 +269,23 @@ const completedByOther = (comments = [], agent = '') => {
   return fence.protectedByPriorClaim ? null : fence
 }
 
+// #167: the loud half of the stamp refusal. A protocol line whose `at:` token parseStamp
+// refuses (date-less HH:MMZ, garbage, a digit-prefix trap) is named here with its RAW token,
+// so the operator sees "this stamp was not used" instead of discovering it through a lost
+// arbitration. Mirrors unresolvedProtocolLines' shape (#49): empty array means every stamp
+// resolved. Only the fold's kinds are inspected - REVIEW/SYNC stamps are not Rule C evidence.
+const malformedStamps = (comments = []) =>
+  (comments || [])
+    .map((c) => c.body?.trim() || '')
+    .filter((body) =>
+      ['CLAIM', 'HANDOFF', 'RELEASE', 'DONE'].includes(markerOf(body)),
+    )
+    .flatMap((body) => {
+      const m = body.match(MARKER_STAMP_RE)
+      if (!m || parseStamp(m[1]).ok) return []
+      return [{ marker: markerOf(body), agent: agentOf(body), token: m[1] }]
+    })
+
 // #66: the board needs a STATE, and in a repo that carries no `status:*` labels the only evidence
 // of state is the protocol timeline. Derived from the SAME fold `ownerOf` runs, deliberately: a
 // "last marker wins" reading would print `unclaimed` beside a holder that `applyMarker` keeps in
@@ -288,5 +316,6 @@ module.exports = {
   hasClaimBy,
   completedByOther,
   unresolvedProtocolLines,
+  malformedStamps,
   protocolStatus,
 }

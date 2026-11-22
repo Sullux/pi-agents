@@ -192,6 +192,9 @@ const formatSync = ({
   hubReason = '',
   staleMinutes = 45,
   now = Date.now(),
+  // #167: { issue, marker, agent, token } rows from malformedStamps - a refused `at:` token is
+  // surfaced here naming the issue and the RAW token, never silently coerced into an ordering.
+  stampWarnings = [],
 } = {}) => {
   const cleanCurrent = cleanAgent(currentAgent)
   const boardSection = formatBoard(issues, currentAgent, repo)
@@ -237,6 +240,17 @@ const formatSync = ({
       : '  (none)',
   ]
 
+  // 3b. #167 malformed stamps - loud, named, and explicit that the token was NOT used to order.
+  const stampLines = stampWarnings.length
+    ? [
+        '\n!! == malformed at: stamps (refused by Rule C; ordering fell back to comment time) ==',
+        ...stampWarnings.map(
+          (w) =>
+            `  #${w.issue} ${w.marker} (${w.agent || 'unattributed'}): raw token \`${w.token}\` is unparseable - NOT used for ordering`,
+        ),
+      ]
+    : []
+
   // 4. Hub tail
   //
   // #65: a repo with no hub used to print `== hub #4, last 5 comments ==` over `(none)` - a phantom
@@ -275,6 +289,7 @@ const formatSync = ({
     ...yourLines,
     ...staleLines,
     ...humanLines,
+    ...stampLines,
     ...hubLines,
   ].join('\n')
 }

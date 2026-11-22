@@ -1,5 +1,6 @@
 const path = require('node:path')
 const fs = require('node:fs')
+const { RuntimeIdentity } = require('../runtime-identity')
 
 const defaultIsAlive = (pid) => {
   try {
@@ -18,6 +19,9 @@ const SessionTracker = ({
   isAlive = defaultIsAlive,
   killProcess = defaultKill,
   now = Date.now,
+  // #167 box 5: record the runtime that started the session, so `page status` can name what
+  // each agent is running, not just that it is running. Injected like the other reads.
+  runtimeIdentity = RuntimeIdentity(),
 } = {}) => {
   const getSessionFile = (agent) =>
     path.join(agentsRoot, agent, '.session.json')
@@ -33,6 +37,7 @@ const SessionTracker = ({
       project,
       startedAt: now(),
       status: 'running',
+      runtime: runtimeIdentity(),
     }
     fsImpl.writeFileSync(file, JSON.stringify(sessionData, null, 2))
 
