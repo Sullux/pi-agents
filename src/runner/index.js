@@ -4,6 +4,7 @@ const { runPiSession } = require('./session')
 const { SessionTracker } = require('./sessionTracker')
 const { nextProgressState } = require('./progressGuard')
 const { adviceProvenanceLine } = require('../cli/runner-currency')
+const { IDLE, IN_WAVE } = require('./liveness')
 
 // #90: join the per-PR advice that `preflight` computed - do NOT re-derive causes here, or this renderer
 // drifts from the classifier exactly the way #87's writer and #87's matcher did. Cap the list so a
@@ -103,9 +104,25 @@ const Runner = ({
         // 1. Preflight check
         const availability = await checkBacklogAvailability({ github, agent })
 
+        // #166: the advisory text this cycle emits (the advice that can repeat verbatim across cycles).
+        // The runner publishes it with its wave state so the reader can derive `wedged` from a streak
+        // of byte-identical advisories conjoined with the boot's depth-behind - never from a clock.
+        const advisoryText = [
+          describeReviewGaps(availability.reviewGaps || []),
+          availability.closures?.note,
+          currencyNote,
+        ]
+          .filter(Boolean)
+          .join('\n')
+
         if (availability.status === 'idle_empty') {
-          if (sessionTracker)
+          if (sessionTracker) {
             sessionTracker.updateStatus(agent, 'waiting (empty)')
+            sessionTracker.publishLiveness(agent, {
+              waveState: IDLE,
+              advisory: advisoryText,
+            })
+          }
           const cancelled = await waitImpl(
             availability.waitSeconds,
             '[Backlog Empty] No open issues in repository.',
@@ -115,8 +132,13 @@ const Runner = ({
         }
 
         if (availability.status === 'idle_busy') {
-          if (sessionTracker)
+          if (sessionTracker) {
             sessionTracker.updateStatus(agent, 'waiting (busy)')
+            sessionTracker.publishLiveness(agent, {
+              waveState: IDLE,
+              advisory: advisoryText,
+            })
+          }
           const cancelled = await waitImpl(
             availability.waitSeconds,
             '[Contention] All open issues claimed; waiting on peer PRs.',
@@ -132,7 +154,13 @@ const Runner = ({
             availability.reason === 'unclaimed_tasks')
         previousReason = availability.reason
 
-        if (sessionTracker) sessionTracker.updateStatus(agent, 'running')
+        if (sessionTracker) {
+          sessionTracker.updateStatus(agent, 'running')
+          sessionTracker.publishLiveness(agent, {
+            waveState: IN_WAVE,
+            advisory: advisoryText,
+          })
+        }
         const sessionResult = await sessionImpl({
           targetPath,
           prompt: resolveCyclePrompt({

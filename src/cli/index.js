@@ -16,6 +16,8 @@ const {
 const { Provenance } = require('./selfcheck')
 const { RuntimeIdentity } = require('../runtime-identity')
 const { RunnerCurrency } = require('./runner-currency')
+const { classifyLiveness } = require('../runner/liveness')
+const { restartGuidance } = require('./restart-guidance')
 
 // #154: the mutating verbs' help lines used to hand-copy the USAGE signatures, and one
 // had already drifted (`release` printed `[--reason]` with no placeholder while errors
@@ -310,13 +312,20 @@ const Cli = ({
         return 0
       }
 
-      const header = `${pad('AGENT', 12)} ${pad('PROJECT', 12)} ${pad('PID', 8)} ${pad('STATUS', 16)} ${pad('UPTIME', 10)} ${pad('RUNTIME', 12)}`
+      const header = `${pad('AGENT', 12)} ${pad('PROJECT', 12)} ${pad('PID', 8)} ${pad('STATUS', 16)} ${pad('LIVENESS', 10)} ${pad('UPTIME', 10)} ${pad('RUNTIME', 12)}`
       const lines = [header]
 
       for (const s of sessions) {
         const uptime = formatUptime(Date.now() - s.startedAt)
+        // #166: liveness is derived at read time - the wave state the runner published, conjoined with
+        // the boot's depth-behind (re-read now, the tip moves) and its byte-identical-advisory streak.
+        const liveness = classifyLiveness({
+          waveState: s.waveState,
+          behind: runnerCurrency.behindOf(s.pid),
+          advisoryStreak: s.advisoryStreak,
+        })
         lines.push(
-          `${pad(s.agent, 12)} ${pad(s.project, 12)} ${pad(String(s.pid), 8)} ${pad(s.status, 16)} ${pad(uptime, 10)} ${pad(s.runtime?.commit || '-', 12)}`,
+          `${pad(s.agent, 12)} ${pad(s.project, 12)} ${pad(String(s.pid), 8)} ${pad(s.status, 16)} ${pad(liveness, 10)} ${pad(uptime, 10)} ${pad(s.runtime?.commit || '-', 12)}`,
         )
       }
       // #167 box 5: name the runtime THIS read resolved from, so the board sees what is running.
@@ -466,6 +475,14 @@ const Cli = ({
         runnerCurrency.describe() ||
           'runner currency: no live runners to report (nothing matched, or the reads were unavailable)',
       )
+      // #166 boxes 4/5: read-only restart guidance for runners behind the tip - names the pid, the
+      // two-step, idle/in-wave, and the unchanged-advisory count. Never signals (#130).
+      const guidance = restartGuidance({
+        runners: runnerCurrency.census().runners,
+        sessions: tracker.listSessions(),
+        behindOf: runnerCurrency.behindOf,
+      })
+      if (guidance.length) stdout(guidance.join('\n'))
       return 0
     }
 

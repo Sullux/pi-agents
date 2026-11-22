@@ -63,7 +63,7 @@ describe('#167 page status renders runtime identity', () => {
     ])
     assert.equal(code, 0)
     assert.match(text, /RUNTIME/)
-    assert.match(text, /bravo\s+pp\s+4242\s+running\s+\S+\s+400977d0f/)
+    assert.match(text, /bravo\s+pp\s+4242\s+running\s+\S+\s+\S+\s+400977d0f/)
     assert.match(text, /runtime: \/checkout\/bin\/page @ 400977d0f/)
   })
 
@@ -77,6 +77,6 @@ describe('#167 page status renders runtime identity', () => {
         startedAt: Date.now(),
       },
     ])
-    assert.match(text, /alpha\s+pi\s+1\s+running\s+\S+\s+-/)
+    assert.match(text, /alpha\s+pi\s+1\s+running\s+\S+\s+\S+\s+-/)
   })
 })
