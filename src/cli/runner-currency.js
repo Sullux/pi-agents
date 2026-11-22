@@ -20,6 +20,38 @@ const defaultRoot = join(__dirname, '..', '..')
 const ANNOTATOR_PATH = 'src/runner/code-currency.js'
 const VERBS = ['start', 'run']
 
+const short = (sha = '') => sha.slice(0, 7)
+
+// #133 follow-up (foxtrot's finding on #146): `rev-list sha..origin/main` ASSUMES LINEARITY - it
+// answers a count even when sha was never on main's line. An unmerged branch tip reads as "1 behind"
+// (inviting a pull that cannot apply) and a composed tree CONTAINING main reads as "current"
+// (advice from unreviewed code rendered as fully fresh). Both are lies by arithmetic. The
+// containment question is merge-base --is-ancestor; execFileSync throws with status 1 for a
+// definite NO, so only a definite false changes state: a stub world that never throws, and every
+// git error that is not "not an ancestor", keep the old path's meaning.
+const offMainsLine = (git) => (sha) => {
+  try {
+    git(['merge-base', '--is-ancestor', sha, 'origin/main'])
+    return false
+  } catch (err) {
+    return err && err.status === 1
+  }
+}
+
+// #133: the one place the provenance sentence is shaped, so the render path composes from the injected
+// seam's READING and this pure formatter - a future refactor that drops the line drops a pinned string.
+// 'current' and undefined both print nothing: an agent whose runner is current gets no extra noise.
+const adviceProvenanceLine = (read) => {
+  if (!read || read.state === 'current') return ''
+  if (read.state === 'offLine')
+    return `Advice provenance: this runner process's code is loaded ${short(read.sha)} (off origin/main's line - that commit was never merged, so advice above may run code main has never SEEN, not merely older code). 'Behind' does not apply, and restart is NOT automatically safe here: it switches the process to main's line, which discards nothing on disk but orphans any wave still unmerged on that commit. This line advises only - nothing was refused, skipped or downgraded.`
+  const at =
+    read.state === 'unknown'
+      ? 'older than the retained reflog'
+      : `loaded ${short(read.sha)} (${Number.isFinite(read.behind) ? `${read.behind} commit${read.behind === 1 ? '' : 's'} behind origin/main` : 'commit count unknown (git could not answer)'})`
+  return `Advice provenance: this runner process's code is ${at} - the closure and backlog advice above was computed by that code and may predate the fix that changed it. Restart the runner ('page start <agent> <project>') to emit current advice; this line advises only - nothing was refused, skipped or downgraded.`
+}
+
 const defaultGit = (cwd) => (args) =>
   execFileSync('git', args, {
     cwd,
@@ -134,9 +166,11 @@ const RunnerCurrency = ({
           )
       if (!rows.length) return ''
       const best = rows.reduce((a, b) => (b.epoch > a.epoch ? b : a))
+      if (offMainsLine(git)(best.sha))
+        return `${best.sha.slice(0, 7)} (off origin/main's line)`
       const behind =
         `${git(['rev-list', '--count', `${best.sha}..${'origin/main'}`])}`.trim()
-      return `${best.sha.slice(0, 7)}${/^\d+$/.test(behind) ? ` (${behind} merges behind)` : ''}`
+      return `${best.sha.slice(0, 7)}${/^\d+$/.test(behind) ? ` (${behind} commits behind)` : ''}`
     })
 
   const census = () => {
@@ -195,7 +229,53 @@ const RunnerCurrency = ({
       .join('\n')
   }
 
-  return { census, describe, runnerIndex }
+  // #133: the self-reading half. The census above answers "which of my sibling runners cannot say?";
+  // this answers "what can the process calling me say about ITSELF", exported so a caller (the runner
+  // loop's advice composer) does not re-derive boot epochs or reflog windows and drift a second copy of
+  // the rule. Same discipline as `loadedAt` for a row: when the boot predates every retained reflog
+  // entry the phrase is 'older than the retained reflog', never the oldest SHA it happens to have - a
+  // fabricated provenance is an accusation. A failed read returns undefined and the caller prints no
+  // line: a suppressed warning is honest silence, a guessed one is not.
+  const selfRead = () => {
+    const entries = safe(() => proc())
+    if (!entries) return undefined
+    const me = entries.find((e) => e.pid === selfPid)
+    if (!me) return undefined
+    const bootMs = me.bootEpochMs + (me.starttimeTicks / 100) * 1000
+    if (!Number.isFinite(bootMs)) return undefined
+    const rows = safe(() =>
+      `${git(['reflog', 'show', '--date=iso-strict', '--format=%H %ct', 'HEAD'])}`
+        .trim()
+        .split('\n')
+        .map((line) => line.split(/\s+/))
+        .map(([sha, ct]) => ({ sha, epoch: num(ct) * 1000 }))
+        .filter(
+          (row) => row.sha && Number.isFinite(row.epoch) && row.epoch <= bootMs,
+        ),
+    )
+    if (!rows) return undefined
+    if (!rows.length) return { state: 'unknown' }
+    const best = rows.reduce((a, b) => (b.epoch > a.epoch ? b : a))
+    if (offMainsLine(git)(best.sha))
+      return { state: 'offLine', sha: best.sha.slice(0, 7) }
+    const behindRaw = safe(
+      () => `${git(['rev-list', '--count', `${best.sha}..origin/main`])}`,
+    )
+    if (behindRaw === undefined) return undefined
+    const behind = Number(`${behindRaw}`.trim())
+    if (!Number.isFinite(behind))
+      return { state: 'stale', sha: best.sha.slice(0, 7), behind: NaN }
+    if (behind === 0)
+      return { state: 'current', sha: best.sha.slice(0, 7), behind: 0 }
+    return { state: 'stale', sha: best.sha.slice(0, 7), behind }
+  }
+
+  return { census, describe, runnerIndex, selfRead }
 }
 
-module.exports = { RunnerCurrency, runnerIndex, ANNOTATOR_PATH }
+module.exports = {
+  RunnerCurrency,
+  runnerIndex,
+  ANNOTATOR_PATH,
+  adviceProvenanceLine,
+}

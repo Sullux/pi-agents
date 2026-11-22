@@ -404,9 +404,12 @@ const Cli = ({
       // #122: passed to the loop rather than printed here. At boot `loadedSha` equals the tree by
       // construction, so a startup line would fire only in a microsecond race and nothing could pin
       // it - the case that matters is the daemon that has been alive an hour before its first spawn
-      // (measured: 2h13m old, 8 merges behind), and that is a per-cycle reading.
+      // (measured: 2h13m old, 8 commits behind), and that is a per-cycle reading.
       const runner = Runner({
         codeCurrency,
+        // #133: same injected instance the `page runners` verb uses (constructed once above, with the
+        // real seams) - threaded to the advice composer so provenance rides the report, not a prompt.
+        runnerCurrency,
         github,
         agent,
         project,
