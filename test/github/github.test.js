@@ -473,3 +473,40 @@ describe('#1319 viewIssue/listPrs: a malformed payload is an instrument failure,
     assert.deepEqual(await client.listPrs(), [])
   })
 })
+
+describe('GitHubClient: rateLimit and custom listIssues fields', () => {
+  it('listIssues forwards explicit options.fields to --json', async () => {
+    let capturedArgs = []
+    const client = GitHubClient({
+      repo: 'Sullux/pitcairn-portal',
+      execFile: (_cmd, args) => {
+        capturedArgs = args
+        return '[]'
+      },
+    })
+    await client.listIssues({ state: 'open', fields: 'number,labels,comments' })
+    const jsonVal = capturedArgs[capturedArgs.indexOf('--json') + 1]
+    assert.equal(jsonVal, 'number,labels,comments')
+  })
+
+  it('rateLimit queries gh api rate_limit and parses resources', async () => {
+    let capturedArgs = []
+    const payload = {
+      resources: {
+        core: { limit: 5000, remaining: 4990, reset: 1795350000 },
+        graphql: { limit: 5000, remaining: 0, reset: 1795351200 },
+      },
+    }
+    const client = GitHubClient({
+      repo: 'Sullux/pitcairn-portal',
+      execFile: (cmd, args) => {
+        capturedArgs = [cmd, ...args]
+        return JSON.stringify(payload)
+      },
+    })
+    const res = await client.rateLimit()
+    assert.deepEqual(capturedArgs, ['gh', 'api', 'rate_limit'])
+    assert.equal(res.resources.graphql.remaining, 0)
+    assert.equal(res.resources.graphql.reset, 1795351200)
+  })
+})

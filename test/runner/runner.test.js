@@ -359,3 +359,161 @@ describe('Runner: zero-tool no-progress loop breaker', () => {
     assert.equal(capturedSessions[4].continueSession, true)
   })
 })
+
+describe('Runner: preflight error & rate-limit backoff', () => {
+  it('queries rateLimit on GraphQL rate-limit error, waits until reset + buffer, and recovers', async () => {
+    const nowMs = Date.parse('2026-11-22T11:00:00Z')
+    const resetEpochSec = Math.floor(Date.parse('2026-11-22T11:25:00Z') / 1000)
+    const waits = []
+    const statuses = []
+    let listCalls = 0
+    let sessionCount = 0
+
+    const runner = Runner({
+      github: {
+        listIssues: async (options = {}) => {
+          listCalls += 1
+          if (listCalls === 1) {
+            throw new Error(
+              'coord: gh issue list failed against Sullux/pitcairn-portal - GraphQL: API rate limit already exceeded for user ID 438228.',
+            )
+          }
+          if ((options.state || 'open') === 'closed') return []
+          return [
+            {
+              number: 55,
+              labels: [{ name: 'status:unclaimed' }, { name: 'type:task' }],
+              comments: [],
+            },
+          ]
+        },
+        listPrs: async () => [],
+        rateLimit: async () => ({
+          resources: {
+            core: { limit: 5000, remaining: 4999, reset: resetEpochSec + 600 },
+            graphql: { limit: 5000, remaining: 0, reset: resetEpochSec },
+          },
+        }),
+      },
+      agent: 'delta',
+      project: 'pp',
+      targetPath: '/tmp/test',
+      now: () => nowMs,
+      sessionTracker: {
+        startSession: () => {},
+        updateStatus: (_agent, st) => statuses.push(st),
+        endSession: () => {},
+      },
+      waitImpl: async (seconds, msg) => {
+        waits.push({ seconds, msg })
+        return false
+      },
+      sessionImpl: async () => {
+        sessionCount += 1
+        return { code: 0, hadToolUse: true }
+      },
+    })
+
+    const res = await runner.runLoop({ maxCycles: 1 })
+    assert.equal(res.stopped, true)
+    assert.equal(sessionCount, 1)
+    // 25 minutes (1500s) + 5s buffer = 1505s
+    assert.equal(waits[0].seconds, 1505)
+    assert.match(waits[0].msg, /Rate Limit/)
+    assert.match(waits[0].msg, /11:25:00Z/)
+    assert.equal(statuses[0], 'waiting (rate-limit)')
+  })
+
+  it('falls back to 300s backoff on rate-limit when rateLimit throws or is unavailable, and on transient errors', async () => {
+    const waits = []
+    const statuses = []
+    let calls = 0
+
+    const runner = Runner({
+      github: {
+        listIssues: async () => {
+          calls += 1
+          if (calls === 1) {
+            throw new Error('GraphQL: API rate limit already exceeded')
+          }
+          if (calls === 2) {
+            throw new Error('HTTP 502 Bad Gateway')
+          }
+          return []
+        },
+        listPrs: async () => [],
+        rateLimit: async () => {
+          throw new Error('network error')
+        },
+      },
+      agent: 'echo',
+      project: 'pp',
+      targetPath: '/tmp/test',
+      sessionTracker: {
+        startSession: () => {},
+        updateStatus: (_agent, st) => statuses.push(st),
+        endSession: () => {},
+      },
+      waitImpl: async (seconds, msg) => {
+        waits.push({ seconds, msg })
+        // Cancel on the 3rd wait (idle_empty after recovery)
+        return waits.length >= 3
+      },
+    })
+
+    const res = await runner.runLoop()
+    assert.equal(res.reason, 'user_exit')
+    assert.equal(waits[0].seconds, 300)
+    assert.match(waits[0].msg, /Rate Limit/)
+    assert.equal(statuses[0], 'waiting (rate-limit)')
+
+    assert.equal(waits[1].seconds, 300)
+    assert.match(waits[1].msg, /Preflight Error.*HTTP 502/)
+    assert.equal(statuses[1], 'waiting (error)')
+  })
+
+  it('backs off idle_busy waits from 60s up to 300s and resets after a ready cycle', async () => {
+    const waits = []
+    let cycleIndex = 0
+    const peerClaimed = [
+      {
+        number: 10,
+        labels: [{ name: 'status:claimed' }],
+        comments: [{ body: '**CLAIM** | agent: bravo' }],
+      },
+    ]
+    const unclaimed = [
+      {
+        number: 11,
+        labels: [{ name: 'status:unclaimed' }, { name: 'type:task' }],
+        comments: [],
+      },
+    ]
+
+    const runner = Runner({
+      github: {
+        listIssues: async (options = {}) => {
+          if ((options.state || 'open') === 'closed') return []
+          // First 5 open polls are idle_busy; 6th has work; 7th is idle_busy again
+          return cycleIndex === 5 ? unclaimed : peerClaimed
+        },
+        listPrs: async () => [],
+      },
+      agent: 'alpha',
+      project: 'pp',
+      targetPath: '/tmp/test',
+      waitImpl: async (seconds) => {
+        cycleIndex += 1
+        waits.push(seconds)
+        return waits.length >= 7
+      },
+      sessionImpl: async () => ({ code: 0, hadToolUse: true }),
+    })
+
+    const res = await runner.runLoop()
+    assert.equal(res.reason, 'user_exit')
+    // 5 consecutive idle_busy waits: 60, 120, 240, 300, 300
+    // then 10s session cooldown, then reset back to 60 on next idle_busy
+    assert.deepEqual(waits, [60, 120, 240, 300, 300, 10, 60])
+  })
+})

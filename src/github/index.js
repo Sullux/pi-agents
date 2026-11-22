@@ -339,6 +339,11 @@ const GitHubClient = ({
       )
     }
     const limit = options.limit ?? ISSUE_PAGE_CEILING
+    const defaultFields =
+      'number,title,labels,comments,body,closedAt,stateReason'
+    const fields = Array.isArray(options.fields)
+      ? options.fields.join(',')
+      : options.fields || defaultFields
     const argv = [
       'issue',
       'list',
@@ -350,7 +355,7 @@ const GitHubClient = ({
       // #161: `stateReason` belongs here, not in a per-row follow-up call. gh answers it on the
       // LIST endpoint (`gh issue list --state closed --json number,stateReason` -> `1294 NOT_PLANNED`),
       // so the sweep can tell a withdrawn close from a dropped promise without one spawn per row.
-      'number,title,labels,comments,body,closedAt,stateReason',
+      fields,
     ]
     // #107: --limit cannot say "the last six hours", and asking for a smaller number is not a
     // smaller read when the population exceeds the ceiling either way - the rows past the cap are
@@ -596,9 +601,21 @@ const GitHubClient = ({
     }
   }
 
+  // Free REST endpoint (`GET /rate_limit` does not decrement quota) used by Runner error backoff
+  // to sleep until the exact GraphQL/Search/Core reset timestamp when rate-limited.
+  const rateLimit = async () => {
+    const raw = execFile('gh', ['api', 'rate_limit'], {
+      cwd,
+      encoding: 'utf8',
+      maxBuffer: GH_MAX_BUFFER,
+    })
+    return JSON.parse(String(raw ?? '').trim())
+  }
+
   return {
     repo: activeRepo,
     runGh,
+    rateLimit,
     issueKind,
     issueTimeline,
     pullRequest,

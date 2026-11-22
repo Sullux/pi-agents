@@ -776,18 +776,31 @@ describe('Runner: unattested-closure scan (#99)', () => {
       'open_prs carries the scan - the state most of the fleet sits in during a wave',
     )
 
-    // and the wait path: the scan runs before the branch checks, so peer_contention has already paid for
-    // the read. Dropping it discarded a result rather than avoiding a call.
+    // Wait path: peer_contention never launches a session, so skipping the closed-axis closure scan
+    // eliminates wasted GraphQL/timeline reads on every idle cycle.
+    const contentionCalls = []
     const contention = await checkBacklogAvailability({
-      github: build(peersOwnEverything, []),
+      github: {
+        listIssues: async (options = {}) => {
+          contentionCalls.push(options)
+          return (options.state || 'open') === 'closed'
+            ? closed
+            : peersOwnEverything
+        },
+        listPrs: async () => [],
+      },
       agent: 'alpha',
       now: () => NOW,
     })
     assert.equal(contention.reason, 'peer_contention')
-    assert.ok(
-      contention.closures?.note.includes('#31'),
-      'peer_contention carries the scan it already paid for',
+    assert.equal(
+      contention.closures,
+      undefined,
+      'idle_busy skips the closed-axis closure scan so idle polls waste zero GraphQL points',
     )
+    assert.equal(contentionCalls.length, 1)
+    assert.equal(contentionCalls[0].state, 'open')
+    assert.equal(contentionCalls[0].fields, 'number,labels,comments')
   })
 
   it('leaves the empty-backlog path alone - no scan, no claim of cleanliness', async () => {

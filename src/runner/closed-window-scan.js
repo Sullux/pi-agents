@@ -69,9 +69,12 @@ const scanClosedWindow = async ({
   const from = to - windowHours * HOUR_MS
   const optionsFor = (a, b) => {
     const search = sliceSearch(a, b)
-    return limit === undefined
-      ? { state: 'closed', search }
-      : { state: 'closed', search, limit }
+    const base = {
+      state: 'closed',
+      search,
+      fields: 'number,body,closedAt,stateReason',
+    }
+    return limit === undefined ? base : { ...base, limit }
   }
 
   const queue = [[from, to]]

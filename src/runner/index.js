@@ -3,6 +3,10 @@ const { waitInterruptible } = require('./countdown')
 const { runPiSession } = require('./session')
 const { SessionTracker } = require('./sessionTracker')
 const { nextProgressState } = require('./progressGuard')
+const {
+  resolvePreflightErrorWait,
+  nextIdleBusyWait,
+} = require('./errorBackoff')
 const { adviceProvenanceLine } = require('../cli/runner-currency')
 const { IDLE, IN_WAVE } = require('./liveness')
 
@@ -78,6 +82,7 @@ const Runner = ({
   sessionImpl = runPiSession,
   codeCurrency = null,
   runnerCurrency = null,
+  now = Date.now,
 } = {}) => {
   const runLoop = async ({ maxCycles = Infinity, onCycle } = {}) => {
     if (sessionTracker && project) {
@@ -86,6 +91,7 @@ const Runner = ({
 
     let cycle = 1
     let previousReason = null
+    let idleBusyStreak = 0
     let progressState = {
       streak: 0,
       forceFreshSession: false,
@@ -102,7 +108,29 @@ const Runner = ({
         const currencyNote = codeCurrency?.describe() ?? ''
 
         // 1. Preflight check
-        const availability = await checkBacklogAvailability({ github, agent })
+        let availability
+        try {
+          availability = await checkBacklogAvailability({ github, agent, now })
+        } catch (err) {
+          const backoff = await resolvePreflightErrorWait({
+            error: err,
+            github,
+            now,
+          })
+          if (sessionTracker) {
+            sessionTracker.updateStatus(agent, backoff.status)
+            sessionTracker.publishLiveness?.(agent, {
+              waveState: IDLE,
+              advisory: currencyNote,
+            })
+          }
+          const cancelled = await waitImpl(
+            backoff.waitSeconds,
+            backoff.waitMessage,
+          )
+          if (cancelled) return { stopped: true, reason: 'user_exit', cycle }
+          continue
+        }
 
         // #166: the advisory text this cycle emits (the advice that can repeat verbatim across cycles).
         // The runner publishes it with its wave state so the reader can derive `wedged` from a streak
@@ -116,9 +144,10 @@ const Runner = ({
           .join('\n')
 
         if (availability.status === 'idle_empty') {
+          idleBusyStreak = 0
           if (sessionTracker) {
             sessionTracker.updateStatus(agent, 'waiting (empty)')
-            sessionTracker.publishLiveness(agent, {
+            sessionTracker.publishLiveness?.(agent, {
               waveState: IDLE,
               advisory: advisoryText,
             })
@@ -132,20 +161,24 @@ const Runner = ({
         }
 
         if (availability.status === 'idle_busy') {
+          const waitSeconds = nextIdleBusyWait(idleBusyStreak)
+          idleBusyStreak += 1
           if (sessionTracker) {
             sessionTracker.updateStatus(agent, 'waiting (busy)')
-            sessionTracker.publishLiveness(agent, {
+            sessionTracker.publishLiveness?.(agent, {
               waveState: IDLE,
               advisory: advisoryText,
             })
           }
           const cancelled = await waitImpl(
-            availability.waitSeconds,
+            waitSeconds,
             '[Contention] All open issues claimed; waiting on peer PRs.',
           )
           if (cancelled) return { stopped: true, reason: 'user_exit', cycle }
           continue
         }
+
+        idleBusyStreak = 0
 
         // 2. Work available -> Run Pi session
         const isNewTask =
@@ -156,7 +189,7 @@ const Runner = ({
 
         if (sessionTracker) {
           sessionTracker.updateStatus(agent, 'running')
-          sessionTracker.publishLiveness(agent, {
+          sessionTracker.publishLiveness?.(agent, {
             waveState: IN_WAVE,
             advisory: advisoryText,
           })
