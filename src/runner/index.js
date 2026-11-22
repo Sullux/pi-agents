@@ -94,6 +94,8 @@ const Runner = ({
     let idleBusyStreak = 0
     let progressState = {
       streak: 0,
+      idleStreak: 0,
+      lastAssistantText: '',
       forceFreshSession: false,
       waitSeconds: 10,
       waitMessage: '[Session Complete] Waiting 10s cooldown before next cycle.',
@@ -211,7 +213,7 @@ const Runner = ({
         })
 
         cycle += 1
-        progressState = nextProgressState(progressState.streak, sessionResult)
+        progressState = nextProgressState(progressState, sessionResult)
 
         // Cooldown between sessions (escalates to backoff when repeated cycles do zero tool work)
         if (sessionTracker)

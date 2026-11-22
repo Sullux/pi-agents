@@ -901,6 +901,60 @@ describe('#139: comment-form verdicts are the whole signal (no reviews field exi
     )
   })
 
+  it('treats an owned issue with an open authored PR as in-review even without the status:in-review label', async () => {
+    const issues = [
+      {
+        number: 1352,
+        labels: [{ name: 'status:claimed' }],
+        comments: [{ body: '**CLAIM** | agent: delta' }],
+      },
+    ]
+    const github = {
+      listIssues: async () => issues,
+      listPrs: async () => [
+        {
+          number: 1401,
+          headRefName: 'feat/1352-private-arrival-schema',
+          headRefOid: '37cf4db500',
+          comments: [],
+        },
+      ],
+    }
+
+    const res = await checkBacklogAvailability({ github, agent: 'delta' })
+    assert.equal(res.status, 'idle_busy')
+    assert.equal(res.reason, 'peer_contention')
+  })
+
+  it('keeps an owned issue with an open PR in owned_claims when a BLOCK verdict exists at current head', async () => {
+    const issues = [
+      {
+        number: 1352,
+        labels: [{ name: 'status:claimed' }],
+        comments: [{ body: '**CLAIM** | agent: delta' }],
+      },
+    ]
+    const github = {
+      listIssues: async () => issues,
+      listPrs: async () => [
+        {
+          number: 1401,
+          headRefName: 'feat/1352-private-arrival-schema',
+          headRefOid: '37cf4db500',
+          comments: [
+            {
+              body: '**BLOCK** | agent: bravo | head `37cf4db` - missing test',
+            },
+          ],
+        },
+      ],
+    }
+
+    const res = await checkBacklogAvailability({ github, agent: 'delta' })
+    assert.equal(res.status, 'ready')
+    assert.equal(res.reason, 'owned_claims')
+  })
+
   it('a verdict comment WITHOUT a head token reads unsigned-verdict, not unreviewed - the two asks are different and the hint says which', async () => {
     const gap = prReviewGap(
       prWith([{ body: '**APPROVE** | agent: agent-alpha' }]),

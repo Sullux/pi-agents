@@ -96,6 +96,24 @@ const verdictIsCurrent = (body, shortSha) => {
   return named ? named === shortSha : body.includes(shortSha)
 }
 
+const isPrBlockedAtHead = (pr) => {
+  const shortSha = shortHead(pr)
+  const byAgent = new Map()
+  for (const c of pr.comments || []) {
+    const body = c.body || ''
+    const match = ATTESTATION_RE.exec(body)
+    if (!match || !verdictIsCurrent(body, shortSha)) continue
+    const verb = match[1].trim().toUpperCase()
+    if (VERDICT_MARKERS.some((v) => verb.startsWith(v))) {
+      byAgent.set(match[2].toLowerCase(), verb)
+    }
+  }
+  for (const verb of byAgent.values()) {
+    if (verb.startsWith('BLOCK')) return true
+  }
+  return false
+}
+
 const isPrReviewedByAgent = (pr, agent) => {
   const norm = cleanAgent(agent)
   if (!norm || !pr.comments?.length) return false
@@ -586,10 +604,27 @@ const checkBacklogAvailability = async ({
     }
   }
 
+  let cachedPrs
+  const getOpenPrs = async () => {
+    if (!cachedPrs) cachedPrs = (await github.listPrs?.()) || []
+    return cachedPrs
+  }
+
   const allMyIssues = nonHubIssues.filter((i) => isMine(i, agent))
-  const myActiveClaims = allMyIssues.filter(
+  const myLabelClaims = allMyIssues.filter(
     (i) => !i.labels?.some((l) => l.name === 'status:in-review'),
   )
+  let myActiveClaims = myLabelClaims
+  if (myLabelClaims.length > 0) {
+    const openPrs = await getOpenPrs()
+    myActiveClaims = myLabelClaims.filter(
+      (issue) =>
+        !openPrs.some(
+          (pr) =>
+            isPrAuthoredByAgent(pr, agent, [issue]) && !isPrBlockedAtHead(pr),
+        ),
+    )
+  }
   if (myActiveClaims.length > 0) {
     const closures = await scanUnattestedClosures({ github, now })
     return {
@@ -611,7 +646,7 @@ const checkBacklogAvailability = async ({
     }
   }
 
-  const openPrs = await github.listPrs()
+  const openPrs = await getOpenPrs()
   const reviewablePrs = openPrs.filter(
     (pr) =>
       !isPrAuthoredByAgent(pr, agent, allMyIssues) &&

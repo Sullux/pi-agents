@@ -64,8 +64,10 @@ const runPiSession = async ({
     })
 
     child.on('close', (code) => {
-      const { hadToolUse } = activityProbe.inspectDelta(targetPath, before)
-      resolve({ code, hadToolUse })
+      const activity = activityProbe.inspectTurn
+        ? activityProbe.inspectTurn(targetPath, before)
+        : activityProbe.inspectDelta(targetPath, before)
+      resolve({ code, ...activity })
     })
 
     child.on('error', (err) => {

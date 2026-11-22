@@ -129,4 +129,137 @@ describe('SessionActivityProbe', () => {
       fs.rmSync(tmpHome, { recursive: true, force: true })
     }
   })
+
+  it('inspectTurn detects read-only idle-exit spins without misclassifying productive work', () => {
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-turn-'))
+    try {
+      const targetPath = '/work/delta/pp'
+      const sessDir = sessionDirFor(targetPath, {
+        os: { homedir: () => tmpHome },
+        path,
+      })
+      fs.mkdirSync(sessDir, { recursive: true })
+      const sessFile = path.join(sessDir, 'session.jsonl')
+      fs.writeFileSync(sessFile, '')
+
+      const probe = SessionActivityProbe({
+        os: { homedir: () => tmpHome },
+        path,
+      })
+
+      // Turn 1: read-only bash check followed by explicit idle-exit summary
+      const b1 = probe.snapshot(targetPath)
+      fs.appendFileSync(
+        sessFile,
+        [
+          {
+            type: 'message',
+            message: {
+              role: 'assistant',
+              stopReason: 'toolUse',
+              content: [{ type: 'toolCall', name: 'bash', arguments: {} }],
+            },
+          },
+          {
+            type: 'message',
+            message: {
+              role: 'toolResult',
+              content: [{ type: 'text', text: '1401 open' }],
+            },
+          },
+          {
+            type: 'message',
+            message: {
+              role: 'assistant',
+              stopReason: 'stop',
+              content: [
+                {
+                  type: 'text',
+                  text: 'Unchanged — #1401 open, no review yet. No claimable tasks, no pending reviews. Exiting cleanly per the idle-exit rule.',
+                },
+              ],
+            },
+          },
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n') + '\n',
+      )
+      const t1 = probe.inspectTurn(targetPath, b1)
+      assert.equal(t1.hadToolUse, true)
+      assert.equal(t1.hadEdit, false)
+      assert.equal(t1.isIdleExit, true)
+
+      // Turn 2: real edit + exit prose is NOT classified as idle spin
+      const b2 = probe.snapshot(targetPath)
+      fs.appendFileSync(
+        sessFile,
+        [
+          {
+            type: 'message',
+            message: {
+              role: 'assistant',
+              stopReason: 'toolUse',
+              content: [{ type: 'toolCall', name: 'edit', arguments: {} }],
+            },
+          },
+          {
+            type: 'message',
+            message: {
+              role: 'assistant',
+              stopReason: 'stop',
+              content: [
+                {
+                  type: 'text',
+                  text: 'Fixed bug and pushed PR. Exiting cleanly.',
+                },
+              ],
+            },
+          },
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n') + '\n',
+      )
+      const t2 = probe.inspectTurn(targetPath, b2)
+      assert.equal(t2.hadToolUse, true)
+      assert.equal(t2.hadEdit, true)
+      assert.equal(t2.isIdleExit, false)
+
+      // Turn 3: non-edit bash action (e.g., merged PR) is NOT classified as idle spin
+      const b3 = probe.snapshot(targetPath)
+      fs.appendFileSync(
+        sessFile,
+        [
+          {
+            type: 'message',
+            message: {
+              role: 'assistant',
+              stopReason: 'toolUse',
+              content: [{ type: 'toolCall', name: 'bash', arguments: {} }],
+            },
+          },
+          {
+            type: 'message',
+            message: {
+              role: 'assistant',
+              stopReason: 'stop',
+              content: [
+                {
+                  type: 'text',
+                  text: 'Merged #1401 and closed #1352. Exiting cleanly.',
+                },
+              ],
+            },
+          },
+        ]
+          .map((e) => JSON.stringify(e))
+          .join('\n') + '\n',
+      )
+      const t3 = probe.inspectTurn(targetPath, b3)
+      assert.equal(t3.hadToolUse, true)
+      assert.equal(t3.hadEdit, false)
+      assert.equal(t3.isIdleExit, false)
+    } finally {
+      fs.rmSync(tmpHome, { recursive: true, force: true })
+    }
+  })
 })

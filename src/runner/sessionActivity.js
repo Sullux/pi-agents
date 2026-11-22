@@ -1,6 +1,7 @@
 const defaultFs = require('node:fs')
 const defaultOs = require('node:os')
 const defaultPath = require('node:path')
+const { summarizeTurnLines } = require('./sessionTurn')
 
 const sessionDirFor = (
   targetPath,
@@ -93,8 +94,8 @@ const SessionActivityProbe = ({
     return listSessionFiles(dir, fs)
   }
 
-  const inspectDelta = (targetPath, before = {}) => {
-    if (!targetPath) return { hadToolUse: undefined }
+  const readDeltaLines = (targetPath, before = {}) => {
+    if (!targetPath) return undefined
     const dir = sessionDirFor(targetPath, { os, path })
     const after = listSessionFiles(dir, fs)
     const lines = []
@@ -105,14 +106,25 @@ const SessionActivityProbe = ({
         const chunk = readAppendedSlice(filePath, prev, size, fs)
         lines.push(...chunk.split('\n'))
       } catch {
-        return { hadToolUse: undefined }
+        return undefined
       }
     }
-    if (!hasAssistantOutput(lines)) return { hadToolUse: undefined }
+    return lines
+  }
+
+  const inspectDelta = (targetPath, before = {}) => {
+    const lines = readDeltaLines(targetPath, before)
+    if (!lines || !hasAssistantOutput(lines)) return { hadToolUse: undefined }
     return { hadToolUse: lines.some(lineHasToolActivity) }
   }
 
-  return { snapshot, inspectDelta }
+  const inspectTurn = (targetPath, before = {}) => {
+    const lines = readDeltaLines(targetPath, before)
+    if (!lines) return { hadToolUse: undefined }
+    return summarizeTurnLines(lines, lineHasToolActivity)
+  }
+
+  return { snapshot, inspectDelta, inspectTurn }
 }
 
 module.exports = {

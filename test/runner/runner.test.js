@@ -517,3 +517,84 @@ describe('Runner: preflight error & rate-limit backoff', () => {
     assert.deepEqual(waits, [60, 120, 240, 300, 300, 10, 60])
   })
 })
+
+describe('Runner: tool-using idle-spin loop breaker', () => {
+  it('backs off and resets --continue when read-only turns exit idle or repeat verbatim', async () => {
+    const sessions = []
+    const waits = []
+    const statuses = []
+    const issues = [
+      {
+        number: 1393,
+        labels: [{ name: 'status:unclaimed' }, { name: 'type:task' }],
+        comments: [],
+      },
+    ]
+
+    const runner = Runner({
+      github: {
+        listIssues: async (options = {}) =>
+          (options.state || 'open') === 'closed' ? [] : issues,
+        listPrs: async () => [],
+      },
+      agent: 'delta',
+      project: 'pp',
+      targetPath: '/tmp/test',
+      sessionTracker: {
+        startSession: () => {},
+        updateStatus: (_a, s) => statuses.push(s),
+        endSession: () => {},
+      },
+      waitImpl: async (seconds) => {
+        waits.push(seconds)
+        return false
+      },
+      sessionImpl: async (opts) => {
+        sessions.push(opts)
+        if (sessions.length <= 3) {
+          return {
+            code: 0,
+            hadToolUse: true,
+            hadEdit: false,
+            isIdleExit: true,
+            assistantText: 'Unchanged — no claimable tasks. Exiting cleanly.',
+          }
+        }
+        if (sessions.length === 4) {
+          return {
+            code: 0,
+            hadToolUse: true,
+            hadEdit: true,
+            isIdleExit: false,
+            assistantText: 'Implemented #1393',
+          }
+        }
+        // Cycles 5 & 6: verbatim non-edit repeat without isIdleExit flag
+        return {
+          code: 0,
+          hadToolUse: true,
+          hadEdit: false,
+          isIdleExit: false,
+          assistantText: 'Still checking #1393 dependencies.',
+        }
+      },
+    })
+
+    await runner.runLoop({ maxCycles: 6 })
+    // Cycles 1-3: idle-spin backoff 60 -> 120 (breaks --continue) -> 240
+    assert.equal(sessions[0].continueSession, true)
+    assert.equal(sessions[1].continueSession, true)
+    assert.equal(sessions[2].continueSession, false)
+    assert.equal(sessions[3].continueSession, false)
+    assert.deepEqual(waits.slice(0, 3), [60, 120, 240])
+    assert.equal(statuses.includes('waiting (idle)'), true)
+
+    // Cycle 4 edited files -> resets to 10s and resumes --continue on Cycle 5
+    assert.equal(waits[3], 10)
+    assert.equal(sessions[4].continueSession, true)
+
+    // Cycle 5 first non-idle text -> 10s; Cycle 6 verbatim repeat -> 60s backoff
+    assert.equal(waits[4], 10)
+    assert.equal(waits[5], 60)
+  })
+})
