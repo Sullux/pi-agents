@@ -71,6 +71,27 @@ const SessionTracker = ({
     } catch {}
   }
 
+  // #166: the runner publishes its wave state and the cycle's advisory text; the streak counts
+  // consecutive byte-identical advisories (the wedged signal box 2 conjoins with behind). An empty
+  // advisory resets the streak to 0 - silence is not a repeated advisory. The reader derives `wedged`
+  // from this streak plus the boot's depth-behind; the runner never self-reports wedged.
+  const publishLiveness = (agent, { waveState, advisory = '' }) => {
+    const file = getSessionFile(agent)
+    if (!fsImpl.existsSync(file)) return
+    try {
+      const data = JSON.parse(fsImpl.readFileSync(file, 'utf8'))
+      data.advisoryStreak = advisory
+        ? advisory === data.lastAdvisory
+          ? (data.advisoryStreak || 1) + 1
+          : 1
+        : 0
+      data.waveState = waveState
+      data.lastAdvisory = advisory
+      data.updatedAt = now()
+      fsImpl.writeFileSync(file, JSON.stringify(data, null, 2))
+    } catch {}
+  }
+
   const endSession = (agent) => {
     const file = getSessionFile(agent)
     if (fsImpl.existsSync(file)) {
@@ -132,6 +153,7 @@ const SessionTracker = ({
   return {
     startSession,
     updateStatus,
+    publishLiveness,
     endSession,
     listSessions,
     stopSession,

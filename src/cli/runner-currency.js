@@ -236,10 +236,10 @@ const RunnerCurrency = ({
   // entry the phrase is 'older than the retained reflog', never the oldest SHA it happens to have - a
   // fabricated provenance is an accusation. A failed read returns undefined and the caller prints no
   // line: a suppressed warning is honest silence, a guessed one is not.
-  const selfRead = () => {
+  const readPid = (pid) => {
     const entries = safe(() => proc())
     if (!entries) return undefined
-    const me = entries.find((e) => e.pid === selfPid)
+    const me = entries.find((e) => e.pid === pid)
     if (!me) return undefined
     const bootMs = me.bootEpochMs + (me.starttimeTicks / 100) * 1000
     if (!Number.isFinite(bootMs)) return undefined
@@ -270,7 +270,21 @@ const RunnerCurrency = ({
     return { state: 'stale', sha: best.sha.slice(0, 7), behind }
   }
 
-  return { census, describe, runnerIndex, selfRead }
+  const selfRead = () => readPid(selfPid)
+
+  // #166: the reader's half - depth-behind for ANY live pid at the moment of the read (the tip moves
+  // under a long-lived runner, so a behind written at publish time would be stale). Reuses readPid's
+  // reflog window rather than drifting a second copy. Only a definite linear `stale` count is behind;
+  // current, off-line, unknown and unmeasurable all read as 0, so an unprovable behind never fabricates
+  // a `wedged` classification.
+  const behindOf = (pid) => {
+    const read = readPid(pid)
+    return read?.state === 'stale' && Number.isFinite(read.behind)
+      ? read.behind
+      : 0
+  }
+
+  return { census, describe, runnerIndex, selfRead, behindOf }
 }
 
 module.exports = {
