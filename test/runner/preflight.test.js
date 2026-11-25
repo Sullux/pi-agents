@@ -955,6 +955,119 @@ describe('#139: comment-form verdicts are the whole signal (no reviews field exi
     assert.equal(res.reason, 'owned_claims')
   })
 
+  it('wakes the author on status:in-review when a peer posts **REVIEW** with REQUEST_CHANGES / REQUEST CHANGES / CONCUR REQUEST_CHANGES at current head (#1538/#1539 shape)', async () => {
+    const issues = [
+      {
+        number: 1538,
+        labels: [{ name: 'status:in-review' }],
+        comments: [
+          { body: '**CLAIM** | agent: agent-charlie | at: 1795465472918' },
+        ],
+      },
+    ]
+
+    for (const verdictBody of [
+      '**REVIEW** | agent: agent-alpha | at: 1795465821077 | pr: #1539\n\nREQUEST_CHANGES (agent-alpha, at head 63ea2917)\n\nhead: `63ea291`',
+      '**REVIEW** | agent: agent-delta | at: 1795362297545 | pr: #1435\n\nREQUEST CHANGES at head 63ea291\n\nhead: `63ea291`',
+      "**REVIEW** | agent: agent-bravo | at: 1795362287949 | pr: #1539\n\nCONCUR with agent-alpha's REQUEST_CHANGES at head 63ea291\n\nhead: `63ea291`",
+    ]) {
+      const github = {
+        listIssues: async () => issues,
+        listPrs: async () => [
+          {
+            number: 1539,
+            headRefName: 'docs/1538-verdict-refetch',
+            headRefOid: '63ea291717dbbfbae217abccb7cb62226cabc49b',
+            closingIssuesReferences: [{ number: 1538 }],
+            comments: [
+              {
+                body: '**REVIEW** | agent: agent-delta | at: 1795465637111 | pr: #1539\n\nAPPROVE (agent-delta, non-author)\n\nhead: `63ea291`',
+              },
+              { body: verdictBody },
+            ],
+          },
+        ],
+      }
+
+      const res = await checkBacklogAvailability({ github, agent: 'charlie' })
+      assert.equal(res.status, 'ready')
+      assert.equal(res.reason, 'owned_claims')
+    }
+  })
+
+  it('does NOT wake the author on status:in-review when an APPROVE merely mentions REQUEST_CHANGES in prose, or when head moved past the block, or when the same reviewer later APPROVEs at that head', async () => {
+    const issues = [
+      {
+        number: 1538,
+        labels: [{ name: 'status:in-review' }],
+        comments: [
+          { body: '**CLAIM** | agent: agent-charlie | at: 1795465472918' },
+        ],
+      },
+    ]
+
+    // Control 1: APPROVE citing historical REQUEST_CHANGES in prose
+    const proseApprovePr = {
+      number: 1539,
+      headRefName: 'docs/1538-verdict-refetch',
+      headRefOid: '63ea291717dbbfbae217abccb7cb62226cabc49b',
+      closingIssuesReferences: [{ number: 1538 }],
+      comments: [
+        {
+          body: '**REVIEW** | agent: agent-foxtrot | at: 1795465816791 | pr: #1539\n\nAPPROVE (agent-foxtrot — delta REQUEST_CHANGES 20:15:16Z on #1535 is historical)\n\nhead: `63ea291`',
+        },
+      ],
+    }
+    const r1 = await checkBacklogAvailability({
+      github: {
+        listIssues: async () => issues,
+        listPrs: async () => [proseApprovePr],
+      },
+      agent: 'charlie',
+    })
+    assert.equal(r1.status, 'idle_busy')
+
+    // Control 2: author pushed a new commit (head moved past 63ea291)
+    const movedHeadPr = {
+      ...proseApprovePr,
+      headRefOid: 'abc9999000111222333444555666777888999000',
+      comments: [
+        {
+          body: '**REVIEW** | agent: agent-alpha | at: 1795465821077 | pr: #1539\n\nREQUEST_CHANGES\n\nhead: `63ea291`',
+        },
+      ],
+    }
+    const r2 = await checkBacklogAvailability({
+      github: {
+        listIssues: async () => issues,
+        listPrs: async () => [movedHeadPr],
+      },
+      agent: 'charlie',
+    })
+    assert.equal(r2.status, 'idle_busy')
+
+    // Control 3: same reviewer superseded their own REQUEST_CHANGES with APPROVE at the same head
+    const supersededPr = {
+      ...proseApprovePr,
+      comments: [
+        {
+          body: '**REVIEW** | agent: agent-alpha | at: 1795465821077 | pr: #1539\n\nREQUEST_CHANGES\n\nhead: `63ea291`',
+        },
+        {
+          body: '**REVIEW** | agent: agent-alpha | at: 1795466000000 | pr: #1539\n\nAPPROVE (re-checked)\n\nhead: `63ea291`',
+        },
+      ],
+    }
+    const r3 = await checkBacklogAvailability({
+      github: {
+        listIssues: async () => issues,
+        listPrs: async () => [supersededPr],
+      },
+      agent: 'charlie',
+    })
+    assert.equal(r3.status, 'idle_busy')
+  })
+
   it('a verdict comment WITHOUT a head token reads unsigned-verdict, not unreviewed - the two asks are different and the hint says which', async () => {
     const gap = prReviewGap(
       prWith([{ body: '**APPROVE** | agent: agent-alpha' }]),

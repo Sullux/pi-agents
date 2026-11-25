@@ -96,6 +96,53 @@ const verdictIsCurrent = (body, shortSha) => {
   return named ? named === shortSha : body.includes(shortSha)
 }
 
+const BLOCK_BODY_RE =
+  /^(?:REQUEST[\s_-]?CHANGES|CHANGES[\s_-]?REQUESTED|BLOCK)\b/i
+const APPROVE_BODY_RE = /^APPROVE(?:D)?\b/i
+const CONCUR_BLOCK_RE =
+  /^CONCUR\b[^\n]*\b(?:REQUEST[\s_-]?CHANGES|CHANGES[\s_-]?REQUESTED|BLOCK)\b/i
+const CONCUR_APPROVE_RE = /^CONCUR\b[^\n]*\bAPPROVE(?:D)?\b/i
+const HEADER_BLOCK_RE =
+  /\bverdict:\s*\*{0,2}(?:REQUEST[\s_-]?CHANGES|CHANGES[\s_-]?REQUESTED|BLOCK)\b/i
+const HEADER_APPROVE_RE = /\bverdict:\s*\*{0,2}APPROVE(?:D)?\b/i
+
+const verdictOutcome = (body, match) => {
+  const headerVerb = match[1].trim().toUpperCase()
+  if (headerVerb.startsWith('BLOCK')) return 'BLOCK'
+  if (headerVerb.startsWith('APPROVE')) return 'APPROVE'
+  if (headerVerb.startsWith('RETRACTION')) return 'RETRACTION'
+  if (!VERDICT_MARKERS.some((v) => headerVerb.startsWith(v))) return ''
+
+  const afterMatch = body.slice(match.index + match[0].length)
+  const newlineIdx = afterMatch.indexOf('\n')
+  const headerRest =
+    newlineIdx >= 0 ? afterMatch.slice(0, newlineIdx) : afterMatch
+  if (HEADER_BLOCK_RE.test(headerRest)) return 'BLOCK'
+  if (HEADER_APPROVE_RE.test(headerRest)) return 'APPROVE'
+
+  const firstBodyLine =
+    newlineIdx >= 0
+      ? afterMatch
+          .slice(newlineIdx + 1)
+          .trimStart()
+          .split('\n')[0]
+          .trim()
+      : ''
+  if (
+    BLOCK_BODY_RE.test(firstBodyLine) ||
+    CONCUR_BLOCK_RE.test(firstBodyLine)
+  ) {
+    return 'BLOCK'
+  }
+  if (
+    APPROVE_BODY_RE.test(firstBodyLine) ||
+    CONCUR_APPROVE_RE.test(firstBodyLine)
+  ) {
+    return 'APPROVE'
+  }
+  return headerVerb
+}
+
 const isPrBlockedAtHead = (pr) => {
   const shortSha = shortHead(pr)
   const byAgent = new Map()
@@ -103,13 +150,11 @@ const isPrBlockedAtHead = (pr) => {
     const body = c.body || ''
     const match = ATTESTATION_RE.exec(body)
     if (!match || !verdictIsCurrent(body, shortSha)) continue
-    const verb = match[1].trim().toUpperCase()
-    if (VERDICT_MARKERS.some((v) => verb.startsWith(v))) {
-      byAgent.set(match[2].toLowerCase(), verb)
-    }
+    const outcome = verdictOutcome(body, match)
+    if (outcome) byAgent.set(match[2].toLowerCase(), outcome)
   }
-  for (const verb of byAgent.values()) {
-    if (verb.startsWith('BLOCK')) return true
+  for (const outcome of byAgent.values()) {
+    if (outcome === 'BLOCK') return true
   }
   return false
 }
@@ -611,20 +656,15 @@ const checkBacklogAvailability = async ({
   }
 
   const allMyIssues = nonHubIssues.filter((i) => isMine(i, agent))
-  const myLabelClaims = allMyIssues.filter(
-    (i) => !i.labels?.some((l) => l.name === 'status:in-review'),
-  )
-  let myActiveClaims = myLabelClaims
-  if (myLabelClaims.length > 0) {
-    const openPrs = await getOpenPrs()
-    myActiveClaims = myLabelClaims.filter(
-      (issue) =>
-        !openPrs.some(
-          (pr) =>
-            isPrAuthoredByAgent(pr, agent, [issue]) && !isPrBlockedAtHead(pr),
-        ),
+  const openPrsForClaims = allMyIssues.length > 0 ? await getOpenPrs() : []
+  const myActiveClaims = allMyIssues.filter((issue) => {
+    const authoredPrs = openPrsForClaims.filter((pr) =>
+      isPrAuthoredByAgent(pr, agent, [issue]),
     )
-  }
+    if (authoredPrs.some(isPrBlockedAtHead)) return true
+    if (issue.labels?.some((l) => l.name === 'status:in-review')) return false
+    return authoredPrs.length === 0
+  })
   if (myActiveClaims.length > 0) {
     const closures = await scanUnattestedClosures({ github, now })
     return {
