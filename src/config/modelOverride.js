@@ -8,7 +8,7 @@ const DEFAULT_MODELS_PATH = path.join(
   'agent',
   'models.json',
 )
-const DEFAULT_QW_CONTEXT_WINDOW = 262144
+const DEFAULT_QW_CONTEXT_WINDOW = 1048576
 
 const syncModelContextOverride = ({
   modelsPath = DEFAULT_MODELS_PATH,
@@ -41,10 +41,7 @@ const syncModelContextOverride = ({
       ? explicitWindow
       : DEFAULT_QW_CONTEXT_WINDOW
 
-    if (
-      current.contextWindow &&
-      (!hasExplicit || current.contextWindow === targetWindow)
-    ) {
+    if (current.contextWindow === targetWindow) {
       return { ok: true, changed: false, contextWindow: current.contextWindow }
     }
 
@@ -61,5 +58,6 @@ const syncModelContextOverride = ({
 }
 
 module.exports = {
+  DEFAULT_QW_CONTEXT_WINDOW,
   syncModelContextOverride,
 }

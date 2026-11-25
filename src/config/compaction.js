@@ -2,6 +2,8 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
+const { DEFAULT_QW_CONTEXT_WINDOW } = require('./modelOverride')
+
 const DEFAULT_SETTINGS_PATH = path.join(
   os.homedir(),
   '.pi',
@@ -9,11 +11,13 @@ const DEFAULT_SETTINGS_PATH = path.join(
   'settings.json',
 )
 
+const DEFAULT_QW_COMPACT_PERCENT = 20
+
 const syncCompactionSettings = ({
   settingsPath = DEFAULT_SETTINGS_PATH,
-  model = 'qw/qwen3.8-max',
-  contextWindow = 262144,
-  percent = 60,
+  model = 'qw/qwen4-max',
+  contextWindow,
+  percent,
   fsImpl = fs,
 } = {}) => {
   try {
@@ -23,10 +27,20 @@ const syncCompactionSettings = ({
       settings = JSON.parse(content || '{}')
     }
 
-    const safePercent = Math.min(Math.max(Number(percent) || 60, 10), 95)
+    const isQw = String(model || '').startsWith('qw/')
+    const resolvedWindow =
+      Number(contextWindow) || (isQw ? DEFAULT_QW_CONTEXT_WINDOW : 262144)
+    const resolvedPercent =
+      percent !== undefined
+        ? Number(percent)
+        : isQw
+          ? DEFAULT_QW_COMPACT_PERCENT
+          : 60
+
+    const safePercent = Math.min(Math.max(resolvedPercent || 60, 10), 95)
     const reserveTokens = Math.max(
       16384,
-      Math.round(contextWindow * (1 - safePercent / 100)),
+      Math.round(resolvedWindow * (1 - safePercent / 100)),
     )
 
     const compaction = settings.compaction || {}
@@ -54,5 +68,6 @@ const syncCompactionSettings = ({
 }
 
 module.exports = {
+  DEFAULT_QW_COMPACT_PERCENT,
   syncCompactionSettings,
 }

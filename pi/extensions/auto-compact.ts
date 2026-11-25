@@ -8,6 +8,7 @@ import {
 const resolveThresholdPercent = (
   modelId: string = '',
   defaultPercent: number = 16,
+  provider: string = '',
 ): number => {
   if (process.env.COMPACT_MODEL_OVERRIDES) {
     try {
@@ -43,7 +44,7 @@ const resolveThresholdPercent = (
   return Number(
     process.env.PI_COMPACT_PERCENT ||
       process.env.COMPACT_PERCENT ||
-      defaultPercent,
+      (provider === 'qw' ? 20 : defaultPercent),
   )
 }
 
@@ -52,7 +53,11 @@ export default function (pi: ExtensionAPI) {
   pi.on('session_start', async (_event, ctx) => {
     const usage = ctx.getContextUsage()
     const modelId = ctx.model?.id || ''
-    const thresholdPercent = resolveThresholdPercent(modelId, 60)
+    const thresholdPercent = resolveThresholdPercent(
+      modelId,
+      60,
+      ctx.model?.provider || '',
+    )
     const window = usage?.contextWindow || ctx.model?.contextWindow || 0
     const msg = `[auto-compact] Context monitor active: model=${ctx.model?.provider || 'default'}/${modelId}, window=${window} tokens, threshold=${thresholdPercent}%`
     if (ctx.hasUI) {
@@ -187,7 +192,11 @@ ${conversationText}
     const tokens = usage?.tokens ?? 0
     const modelId = ctx.model?.id || ''
 
-    const thresholdPercent = resolveThresholdPercent(modelId, 16)
+    const thresholdPercent = resolveThresholdPercent(
+      modelId,
+      16,
+      ctx.model?.provider || '',
+    )
     const thresholdTokens =
       process.env.PI_COMPACT_TOKENS || process.env.COMPACT_TOKENS
         ? Number(process.env.PI_COMPACT_TOKENS || process.env.COMPACT_TOKENS)

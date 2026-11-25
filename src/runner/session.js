@@ -1,7 +1,13 @@
 const { spawn } = require('node:child_process')
 const path = require('node:path')
-const { syncCompactionSettings } = require('../config/compaction')
-const { syncModelContextOverride } = require('../config/modelOverride')
+const {
+  DEFAULT_QW_COMPACT_PERCENT,
+  syncCompactionSettings,
+} = require('../config/compaction')
+const {
+  DEFAULT_QW_CONTEXT_WINDOW,
+  syncModelContextOverride,
+} = require('../config/modelOverride')
 const { SessionActivityProbe } = require('./sessionActivity')
 
 const runPiSession = async ({
@@ -26,10 +32,19 @@ const runPiSession = async ({
   if (thinking) args.push('--thinking', thinking)
   if (extensionPath) args.push('--extension', extensionPath)
 
-  const activeModel = model || 'qw/qwen3.8-max'
-  const contextWindow = env.CONTEXT_WINDOW
+  const activeModel = model || 'qw/qwen4-max'
+  const isQwModel = String(activeModel).startsWith('qw/')
+  const parsedWindow = env.CONTEXT_WINDOW
     ? Number(env.CONTEXT_WINDOW)
     : undefined
+  const contextWindow =
+    Number.isFinite(parsedWindow) && parsedWindow > 0
+      ? parsedWindow
+      : isQwModel
+        ? DEFAULT_QW_CONTEXT_WINDOW
+        : undefined
+  const compactPercent =
+    env.COMPACT_PERCENT || (isQwModel ? DEFAULT_QW_COMPACT_PERCENT : 60)
 
   syncModelContextOverride({
     model: activeModel,
@@ -38,7 +53,7 @@ const runPiSession = async ({
   syncCompactionSettings({
     model: activeModel,
     contextWindow: contextWindow || 262144,
-    percent: env.COMPACT_PERCENT || 60,
+    percent: compactPercent,
   })
 
   const basePrompt =
@@ -50,6 +65,9 @@ const runPiSession = async ({
 
   const childEnv = {
     ...process.env,
+    ...(isQwModel && !env.COMPACT_PERCENT
+      ? { COMPACT_PERCENT: String(DEFAULT_QW_COMPACT_PERCENT) }
+      : {}),
     ...env,
     PI_AUTO_EXIT: '1',
   }
