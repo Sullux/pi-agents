@@ -598,3 +598,49 @@ describe('Runner: tool-using idle-spin loop breaker', () => {
     assert.equal(waits[5], 60)
   })
 })
+
+describe('Runner: merge-ready PR wake prompt', () => {
+  it('surfaces mergeReadyPrs in the cycle prompt when an authored PR is approved at current head', async () => {
+    const prompts = []
+    const issues = [
+      {
+        number: 1538,
+        labels: [{ name: 'status:in-review' }],
+        comments: [{ body: '**CLAIM** | agent: charlie' }],
+      },
+    ]
+    const prs = [
+      {
+        number: 1539,
+        headRefName: 'docs/1538-verdict-refetch',
+        headRefOid: 'dac21c2a0011223344556677889900aabbccddee',
+        closingIssuesReferences: [{ number: 1538 }],
+        comments: [
+          {
+            body: '**REVIEW** | agent: agent-alpha | head `dac21c2`\n\nAPPROVE',
+          },
+        ],
+      },
+    ]
+
+    const runner = Runner({
+      github: {
+        listIssues: async (options = {}) =>
+          (options.state || 'open') === 'closed' ? [] : issues,
+        listPrs: async () => prs,
+      },
+      agent: 'charlie',
+      project: 'pp',
+      targetPath: '/tmp/test',
+      waitImpl: async () => false,
+      sessionImpl: async (opts) => {
+        prompts.push(opts.prompt)
+        return { code: 0, hadToolUse: true, hadEdit: true }
+      },
+    })
+
+    await runner.runLoop({ maxCycles: 1 })
+    assert.equal(prompts.length, 1)
+    assert.match(prompts[0], /Merge hand ready on 1 authored PR \(#1539\)/)
+  })
+})

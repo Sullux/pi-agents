@@ -995,7 +995,7 @@ describe('#139: comment-form verdicts are the whole signal (no reviews field exi
     }
   })
 
-  it('does NOT wake the author on status:in-review when an APPROVE merely mentions REQUEST_CHANGES in prose, or when head moved past the block, or when the same reviewer later APPROVEs at that head', async () => {
+  it('does NOT trigger owned_claims on status:in-review when an APPROVE merely mentions REQUEST_CHANGES in prose, or when head moved past the block, or when the same reviewer later APPROVEs at that head', async () => {
     const issues = [
       {
         number: 1538,
@@ -1006,7 +1006,7 @@ describe('#139: comment-form verdicts are the whole signal (no reviews field exi
       },
     ]
 
-    // Control 1: APPROVE citing historical REQUEST_CHANGES in prose
+    // Control 1: APPROVE citing historical REQUEST_CHANGES in prose -> merge_ready_prs (not owned_claims)
     const proseApprovePr = {
       number: 1539,
       headRefName: 'docs/1538-verdict-refetch',
@@ -1025,9 +1025,11 @@ describe('#139: comment-form verdicts are the whole signal (no reviews field exi
       },
       agent: 'charlie',
     })
-    assert.equal(r1.status, 'idle_busy')
+    assert.equal(r1.status, 'ready')
+    assert.equal(r1.reason, 'merge_ready_prs')
+    assert.deepEqual(r1.mergeReadyPrs, [1539])
 
-    // Control 2: author pushed a new commit (head moved past 63ea291)
+    // Control 2: author pushed a new commit (head moved past 63ea291) -> stays idle_busy
     const movedHeadPr = {
       ...proseApprovePr,
       headRefOid: 'abc9999000111222333444555666777888999000',
@@ -1046,7 +1048,7 @@ describe('#139: comment-form verdicts are the whole signal (no reviews field exi
     })
     assert.equal(r2.status, 'idle_busy')
 
-    // Control 3: same reviewer superseded their own REQUEST_CHANGES with APPROVE at the same head
+    // Control 3: same reviewer superseded their own REQUEST_CHANGES with APPROVE at the same head -> merge_ready_prs (not owned_claims)
     const supersededPr = {
       ...proseApprovePr,
       comments: [
@@ -1065,7 +1067,96 @@ describe('#139: comment-form verdicts are the whole signal (no reviews field exi
       },
       agent: 'charlie',
     })
-    assert.equal(r3.status, 'idle_busy')
+    assert.equal(r3.status, 'ready')
+    assert.equal(r3.reason, 'merge_ready_prs')
+    assert.deepEqual(r3.mergeReadyPrs, [1539])
+  })
+
+  it('wakes the author with merge_ready_prs when peers approve at current head, and stays idle_busy on retractions, witnesses, or self-approvals', async () => {
+    const issues = [
+      {
+        number: 1538,
+        labels: [{ name: 'status:in-review' }],
+        comments: [{ body: '**CLAIM** | agent: agent-charlie' }],
+      },
+    ]
+    const basePr = {
+      number: 1539,
+      headRefName: 'docs/1538-verdict-refetch',
+      headRefOid: 'dac21c2a0011223344556677889900aabbccddee',
+      closingIssuesReferences: [{ number: 1538 }],
+    }
+
+    // Retraction by another peer blocks merge-readiness even with an approval present
+    const retractedRes = await checkBacklogAvailability({
+      github: {
+        listIssues: async () => issues,
+        listPrs: async () => [
+          {
+            ...basePr,
+            comments: [
+              {
+                body: '**RE-ATTEST** | agent: agent-delta | head `dac21c2`\n\nAPPROVE',
+              },
+              {
+                body: '**RETRACTION** | agent: agent-alpha | head `dac21c2`\n\nRetracting prior approve pending re-check',
+              },
+            ],
+          },
+        ],
+      },
+      agent: 'charlie',
+    })
+    assert.equal(retractedRes.status, 'idle_busy')
+
+    // Witness + self-approval alone do not wake merge_ready_prs
+    const nonPeerRes = await checkBacklogAvailability({
+      github: {
+        listIssues: async () => issues,
+        listPrs: async () => [
+          {
+            ...basePr,
+            comments: [
+              {
+                body: '**WITNESS for box 1** | agent: agent-echo | head `dac21c2`',
+              },
+              {
+                body: '**APPROVE** | agent: agent-charlie | head `dac21c2`',
+              },
+            ],
+          },
+        ],
+      },
+      agent: 'charlie',
+    })
+    assert.equal(nonPeerRes.status, 'idle_busy')
+
+    // Unclaimed tasks still take precedence over merge_ready_prs
+    const unclaimedFirstRes = await checkBacklogAvailability({
+      github: {
+        listIssues: async () => [
+          ...issues,
+          {
+            number: 1540,
+            labels: [{ name: 'status:unclaimed' }],
+            comments: [],
+          },
+        ],
+        listPrs: async () => [
+          {
+            ...basePr,
+            comments: [
+              {
+                body: '**REVIEW** | agent: agent-delta | head `dac21c2`\n\nAPPROVE',
+              },
+            ],
+          },
+        ],
+      },
+      agent: 'charlie',
+    })
+    assert.equal(unclaimedFirstRes.status, 'ready')
+    assert.equal(unclaimedFirstRes.reason, 'unclaimed_tasks')
   })
 
   it('a verdict comment WITHOUT a head token reads unsigned-verdict, not unreviewed - the two asks are different and the hint says which', async () => {

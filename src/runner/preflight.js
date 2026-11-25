@@ -143,7 +143,7 @@ const verdictOutcome = (body, match) => {
   return headerVerb
 }
 
-const isPrBlockedAtHead = (pr) => {
+const verdictsAtHead = (pr) => {
   const shortSha = shortHead(pr)
   const byAgent = new Map()
   for (const c of pr.comments || []) {
@@ -153,10 +153,24 @@ const isPrBlockedAtHead = (pr) => {
     const outcome = verdictOutcome(body, match)
     if (outcome) byAgent.set(match[2].toLowerCase(), outcome)
   }
-  for (const outcome of byAgent.values()) {
+  return byAgent
+}
+
+const isPrBlockedAtHead = (pr) => {
+  for (const outcome of verdictsAtHead(pr).values()) {
     if (outcome === 'BLOCK') return true
   }
   return false
+}
+
+const isPrMergeReadyAtHead = (pr, agent = '') => {
+  const norm = cleanAgent(agent)
+  let approvals = 0
+  for (const [reviewer, outcome] of verdictsAtHead(pr).entries()) {
+    if (outcome === 'BLOCK' || outcome === 'RETRACTION') return false
+    if (outcome === 'APPROVE' && reviewer !== norm) approvals += 1
+  }
+  return approvals > 0
 }
 
 const isPrReviewedByAgent = (pr, agent) => {
@@ -707,6 +721,23 @@ const checkBacklogAvailability = async ({
     }
   }
 
+  const mergeReadyPrs = openPrs.filter(
+    (pr) =>
+      isPrAuthoredByAgent(pr, agent, allMyIssues) &&
+      isPrMergeReadyAtHead(pr, agent),
+  )
+
+  if (mergeReadyPrs.length > 0) {
+    const closures = await scanUnattestedClosures({ github, now })
+    return {
+      status: 'ready',
+      closures,
+      reason: 'merge_ready_prs',
+      count: mergeReadyPrs.length,
+      mergeReadyPrs: mergeReadyPrs.map((pr) => pr.number),
+    }
+  }
+
   return {
     status: 'idle_busy',
     reason: 'peer_contention',
@@ -720,6 +751,7 @@ module.exports = {
   UNATTESTED_WINDOW_HOURS,
   CLOSE_SCAN_LIMIT,
   isPrAuthoredByAgent,
+  isPrMergeReadyAtHead,
   isPrReviewedByAgent,
   prReviewGap,
   VERDICT_MARKERS,

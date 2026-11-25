@@ -27,10 +27,16 @@ const describeReviewGaps = (gaps = []) => {
   return `Review owed on ${owed.length} open PR${owed.length === 1 ? '' : 's'} - ${shown}${suffix}`
 }
 
+const describeMergeReadyPrs = (mergeReadyPrs = []) =>
+  mergeReadyPrs.length > 0
+    ? `Merge hand ready on ${mergeReadyPrs.length} authored PR${mergeReadyPrs.length === 1 ? '' : 's'} (${mergeReadyPrs.map((n) => `#${n}`).join(', ')}): verify peer approvals and thread currency, and merge + close the linked issue if quorum is met.`
+    : ''
+
 const resolveCyclePrompt = ({
   isNewTask = false,
   steering = '',
   reviewGaps = [],
+  mergeReadyPrs = [],
   closures = null,
   codeCurrency = '',
   runnerCurrency = null,
@@ -39,7 +45,8 @@ const resolveCyclePrompt = ({
     ? 'Proceed with development using the coordinate skill (finish any in-progress work, or check the board and PRs if ready for a new task).'
     : 'Continue development using the coordinate skill.'
   const hint = describeReviewGaps(reviewGaps)
-  let withHint = hint ? `${base}\n${hint}` : base
+  const mergeHint = describeMergeReadyPrs(mergeReadyPrs)
+  let withHint = [base, hint, mergeHint].filter(Boolean).join('\n')
   // #99: the closure report is preflight's, not this file's - render what the scan measured, including
   // its "0 unattested of N scanned" form, so a clean sweep and a blind one stay distinguishable to the
   // agent reading the prompt. An unreadable scan says UNKNOWN in its own note.
@@ -52,7 +59,7 @@ const resolveCyclePrompt = ({
   // the injected seam (a /proc walk plus git), so a fake whose reads throw must yield no line and no
   // crash - suppressed here means the seam was called and failed, which a pin distinguishes from an
   // absent seam never being consulted at all. Current boot prints nothing: no noise for no defect.
-  const hasAdvice = Boolean(hint || closures?.note)
+  const hasAdvice = Boolean(hint || mergeHint || closures?.note)
   if (hasAdvice && runnerCurrency) {
     let read
     try {
@@ -139,6 +146,7 @@ const Runner = ({
         // of byte-identical advisories conjoined with the boot's depth-behind - never from a clock.
         const advisoryText = [
           describeReviewGaps(availability.reviewGaps || []),
+          describeMergeReadyPrs(availability.mergeReadyPrs || []),
           availability.closures?.note,
           currencyNote,
         ]
@@ -185,7 +193,8 @@ const Runner = ({
         // 2. Work available -> Run Pi session
         const isNewTask =
           progressState.forceFreshSession ||
-          (previousReason === 'owned_claims' &&
+          ((previousReason === 'owned_claims' ||
+            previousReason === 'merge_ready_prs') &&
             availability.reason === 'unclaimed_tasks')
         previousReason = availability.reason
 
@@ -202,6 +211,7 @@ const Runner = ({
             isNewTask,
             steering,
             reviewGaps: availability.reviewGaps || [],
+            mergeReadyPrs: availability.mergeReadyPrs || [],
             closures: availability.closures || null,
             codeCurrency: currencyNote,
             runnerCurrency,
